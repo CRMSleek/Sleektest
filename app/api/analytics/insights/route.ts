@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
 
     // Generate AI insights
     const { text } = await generateText({
-      model: openai("gpt-4.1-nano"),
+      model: openai("gpt-4.1-mini"),
       prompt: `Analyze this customer data and provide 3-4 actionable business insights:
 
 Customer Data Summary:
