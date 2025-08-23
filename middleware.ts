@@ -3,7 +3,12 @@ import type { NextRequest } from "next/server"
 import { verifyToken } from "./lib/auth"
 
 export async function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/dashboard")) {
+  const { pathname } = request.nextUrl
+  
+  const publicRoutes = ["/", "/login", "/register", "/features", "/pricing", "/about"]
+  const isPublicRoute = publicRoutes.includes(pathname) || pathname.startsWith("/survey/")
+  
+  if (pathname.startsWith("/dashboard")) {
     const token = request.cookies.get("auth-token")?.value
 
     if (!token) {

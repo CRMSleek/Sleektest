@@ -25,6 +25,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
 
@@ -33,7 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (!loading) {
+    if (!loading && !isLoggingOut) {
       const publicRoutes = ["/", "/login", "/register", "/features", "/pricing", "/about"]
       const isPublicRoute = publicRoutes.includes(pathname) || pathname.startsWith("/survey/")
 
@@ -43,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         router.push("/dashboard")
       }
     }
-  }, [user, loading, pathname, router])
+  }, [user, loading, pathname, router, isLoggingOut])
 
   const checkAuth = async () => {
     try {
@@ -94,9 +95,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" })
-    setUser(null)
-    router.push("/")
+    setIsLoggingOut(true)
+    try {
+      setUser(null)
+      
+      await fetch("/api/auth/logout", { method: "POST" })
+      
+      router.push("/")
+    } catch (error) {
+      console.error("Logout error:", error)
+      router.push("/")
+    } finally {
+      setTimeout(() => setIsLoggingOut(false), 1000)
+    }
   }
 
   return <AuthContext.Provider value={{ user, loading, login, signup, logout }}>{children}</AuthContext.Provider>
