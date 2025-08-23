@@ -99,19 +99,24 @@ export default function SurveysPage() {
       </motion.div>
 
       {surveys.length === 0 ? (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No surveys yet</h3>
-            <p className="text-gray-600 mb-4">Create your first survey to start collecting customer feedback.</p>
-            <Link href="/dashboard/surveys/new">
-              <Button>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Your First Survey
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={fadeUp}>
+          <Card>
+            <CardContent className="p-12 text-center">
+              <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">No surveys yet</h3>
+              <p className="text-gray-600 mb-4">Create your first survey to start collecting customer feedback.</p>
+              <Link href="/dashboard/surveys/new">
+                <Button>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Your First Survey
+                </Button>
+              </Link>
+            </CardContent>
+          </Card>
+        </motion.div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {surveys.map((survey, i) => (
@@ -128,8 +133,7 @@ export default function SurveysPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="flex justify-between items-center mb-4">
-                    { /* <span className="text-sm text-gray-600">{survey._count.responses} responses</span> */}
-                    <span className="text-sm text-gray-600">{Math.floor(Math.random() * 500)} responses</span>
+                    <span className="text-sm text-gray-600">{survey._count.responses} responses</span>
                     <span
                       className={`px-2 py-1 rounded-full text-xs ${
                         survey.isActive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"

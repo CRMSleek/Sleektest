@@ -20,10 +20,14 @@ export function DashboardRecentCustomers() {
 
   const fetchRecentCustomers = async () => {
     try {
-      const response = await fetch("/api/customers?limit=5")
+      const response = await fetch("/api/customers")
       if (response.ok) {
         const data = await response.json()
-        setCustomers(data.customers.slice(0, 5))
+        // Sort by creation date and take the 5 most recent
+        const recentCustomers = data.customers
+          .sort((a: Customer, b: Customer) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 5)
+        setCustomers(recentCustomers)
       }
     } catch (error) {
       console.error("Failed to fetch recent customers:", error)

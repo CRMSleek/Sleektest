@@ -13,9 +13,10 @@ interface DashboardStats {
   totalCustomers: number
   recentActivity: Array<{
     id: string
-    type: "survey_created" | "response_received"
-    message: string
-    timestamp: string
+    surveyTitle: string
+    customerName: string
+    customerEmail: string
+    submittedAt: string
   }>
 }
 
@@ -34,29 +35,25 @@ export default function DashboardPage() {
 
   const fetchDashboardData = async () => {
     try {
-      // This would be replaced with actual API calls
-      // For now, we'll use mock data
-      setStats({
-        totalSurveys: 5,
-        totalResponses: 1234,
-        totalCustomers: 3793,
-        recentActivity: [
-          {
-            id: "1",
-            type: "response_received",
-            message: "New response to Customer Feedback Survey",
-            timestamp: "2 hours ago",
-          },
-          {
-            id: "2",
-            type: "survey_created",
-            message: "Created Product Satisfaction Survey",
-            timestamp: "1 day ago",
-          },
-        ],
-      })
+      const response = await fetch("/api/analytics")
+      if (response.ok) {
+        const data = await response.json()
+        setStats({
+          totalSurveys: data.metrics.totalSurveys,
+          totalResponses: data.metrics.totalResponses,
+          totalCustomers: data.metrics.totalCustomers,
+          recentActivity: data.recentActivity || [],
+        })
+      }
     } catch (error) {
       console.error("Fetch dashboard data error:", error)
+      // Fallback to default values if API fails
+      setStats({
+        totalSurveys: 0,
+        totalResponses: 0,
+        totalCustomers: 0,
+        recentActivity: [],
+      })
     } finally {
       setLoading(false)
     }
@@ -105,7 +102,7 @@ export default function DashboardPage() {
           desc: "Active surveys",
         }, {
           title: "Total Responses",
-          value: stats.totalResponses,
+          value: `${stats.totalResponses}`,
           icon: <BarChart3 className="h-4 w-4 text-green-400" />,
           desc: "Survey responses",
         }, {
@@ -193,7 +190,7 @@ export default function DashboardPage() {
             <CardTitle>Recent Activity</CardTitle>
           </CardHeader>
           <CardContent>
-            {stats.recentActivity.length > 0 ? (
+            {stats.recentActivity && stats.recentActivity.length > 0 ? (
               <div className="space-y-4">
                 {stats.recentActivity.map((activity, i) => (
                   <motion.div
@@ -207,8 +204,14 @@ export default function DashboardPage() {
                     <div className="flex items-center space-x-4">
                       <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                       <div className="flex-1">
-                        <p className="text-sm">{activity.message}</p>
-                        <p className="text-xs text-gray-400">{activity.timestamp}</p>
+                        <p className="text-sm">
+                          <span className="font-medium">{activity.customerName}</span> responded to{" "}
+                          <span className="font-medium">{activity.surveyTitle}</span>
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {new Date(activity.submittedAt).toLocaleDateString()} at{" "}
+                          {new Date(activity.submittedAt).toLocaleTimeString()}
+                        </p>
                       </div>
                     </div>
                   </motion.div>

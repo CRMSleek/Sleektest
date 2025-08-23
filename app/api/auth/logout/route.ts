@@ -5,8 +5,8 @@ export async function POST() {
 
   response.cookies.set("auth-token", "", {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",
+    secure: false,
+    sameSite: "lax",
     maxAge: 0,
   })
 

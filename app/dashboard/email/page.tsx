@@ -35,6 +35,7 @@ export default function EmailPage() {
       variants={fade}>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Email</h1>
+          <h3 className="text-xl tracking-tight">This feature will be available in the next release!</h3>
           <p className="text-muted-foreground">Send, receive, and track emails</p>
         </div>
       </motion.div>

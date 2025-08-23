@@ -9,54 +9,8 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import {
-  Lightbulb,
-  RefreshCw,
-  TrendingUp,
-  Users,
-  MapPin,
-  Star,
-} from "lucide-react"
+import { Lightbulb, RefreshCw } from "lucide-react"
 import { motion } from "framer-motion"
-
-const mockInsights = [
-  {
-    id: "1",
-    type: "trend",
-    title: "Customer Satisfaction Improving",
-    description:
-      "Your customer satisfaction scores have increased by 15% over the past 3 months. The main drivers appear to be improved response times and better product quality.",
-    icon: TrendingUp,
-    priority: "high",
-  },
-  {
-    id: "2",
-    type: "demographic",
-    title: "Growing Younger Audience",
-    description:
-      "There's been a 23% increase in customers aged 25-35. Consider developing products or services that appeal to this demographic's preferences for digital-first experiences.",
-    icon: Users,
-    priority: "medium",
-  },
-  {
-    id: "3",
-    type: "geographic",
-    title: "West Coast Expansion Opportunity",
-    description:
-      "Survey data shows high interest from the West Coast region, but low current customer representation. This could be a prime expansion opportunity.",
-    icon: MapPin,
-    priority: "medium",
-  },
-  {
-    id: "4",
-    type: "feedback",
-    title: "Mobile App Feature Request",
-    description:
-      "42% of survey respondents mentioned wanting a mobile app. This is the most frequently requested feature across all customer segments.",
-    icon: Star,
-    priority: "high",
-  },
-]
 
 const fadeUp = {
   hidden: { opacity: 0, y: 30 },
@@ -67,27 +21,46 @@ const fadeUp = {
   }),
 }
 
+type Insight = {
+  title?: string
+  description: string
+  type?: string
+  priority: string
+  id?: string
+}
+
 export function AnalyticsInsights() {
-  const [insights, setInsights] = useState([])
+  const [insights, setInsights] = useState<Insight[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
 
   const generateNewInsights = async () => {
     setIsGenerating(true)
 
-    await new Promise((resolve) => setTimeout(resolve, 2000))
+    try {
+      const response = await fetch("/api/analytics/insights", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
 
-    const newInsight = {
-      id: Date.now().toString(),
-      type: "trend",
-      title: "Peak Response Times Identified",
-      description:
-        "Analysis shows customers are most likely to respond to surveys between 2-4 PM on weekdays. Consider timing your survey campaigns accordingly.",
-      icon: TrendingUp,
-      priority: "medium" as const,
+      console.log("Fetch status:", response.status)
+
+      if (!response.ok) {
+        const err = await response.text()
+        console.error("Error response:", err)
+        throw new Error("Failed to generate insights")
+      }
+
+      const data = await response.json()
+      console.log("Insights data:", data)
+
+      console.log(data.insights)
+      setInsights(data.insights)
+    } catch (error) {
+      console.error("Failed to generate insights:", error)
+      setInsights([])
+    } finally {
+      setIsGenerating(false)
     }
-
-    setInsights([newInsight, ...mockInsights.slice(0, 3)])
-    setIsGenerating(false)
   }
 
   const getPriorityColor = (priority: string) => {
@@ -130,19 +103,14 @@ export function AnalyticsInsights() {
           viewport={{ once: true, amount: 0.2 }}
         >
           {insights.map((insight, i) => (
-            <motion.div key={insight.id} variants={fadeUp} custom={i}>
+            <motion.div key={insight.id ?? i} variants={fadeUp} custom={i}>
               <Card className={`border-l-4 ${getPriorityColor(insight.priority)}`}>
                 <CardHeader>
-                  <div className="flex items-start gap-4">
-                    <div className="p-2 rounded-lg bg-primary/10">
-                      <insight.icon className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <CardTitle className="text-lg">{insight.title}</CardTitle>
-                      <CardDescription className="mt-1 text-base">
-                        {insight.description}
-                      </CardDescription>
-                    </div>
+                  <div className="flex flex-col gap-2">
+                    <CardTitle className="text-lg">{insight.title}</CardTitle>
+                    <CardDescription className="text-base">
+                      {insight.description}
+                    </CardDescription>
                     <div className="text-xs text-muted-foreground capitalize">
                       {insight.priority} Priority
                     </div>
@@ -153,24 +121,6 @@ export function AnalyticsInsights() {
           ))}
         </motion.div>
       )}
-
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Lightbulb className="h-5 w-5" />
-            How AI Insights Work
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Our AI analyzes your customer survey responses, demographic data,
-            and feedback patterns to identify trends, opportunities, and
-            actionable insights. These insights are automatically updated as new
-            data comes in, helping you make data-driven decisions for your
-            business.
-          </p>
-        </CardContent>
-      </Card>
     </div>
   )
 }

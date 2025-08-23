@@ -23,7 +23,7 @@ INSERT INTO surveys (id, title, description, questions, is_active, user_id, crea
     "type": "select",
     "question": "How satisfied are you with our service?",
     "required": true,
-    "options": ["Very Satisfied", "Satisfied", "Neutral", "Dissatisfied", "Very Dissatisfied"]
+    "options": ["5", "4", "3", "2", "1"]
   },
   {
     "id": "q2",

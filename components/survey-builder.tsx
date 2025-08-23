@@ -6,15 +6,16 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Plus, Trash2, Save } from "lucide-react"
+import { Plus, Trash2, Save, CheckCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 interface Question {
   id: string
-  type: "text" | "email" | "number" | "select" | "textarea"
+  type: "text" | "email" | "number" | "select" | "textarea" | "satisfaction"
   question: string
   required: boolean
   options?: string[]
+  satisfactionPrompt?: string
 }
 
 interface SurveyBuilderProps {
@@ -85,10 +86,25 @@ export default function SurveyBuilder({ initialSurvey }: SurveyBuilderProps) {
       return
     }
 
+    // Validate questions
+    for (const question of questions) {
+      if (!question.question.trim()) {
+        alert("Please fill in all question texts")
+        return
+      }
+      if (question.type === "select" && (!question.options || question.options.length === 0)) {
+        alert("Please add options for multiple choice questions")
+        return
+      }
+      if (question.type === "satisfaction" && !question.satisfactionPrompt?.trim()) {
+        alert("Please add a satisfaction prompt for satisfaction questions")
+        return
+      }
+    }
+
     setSaving(true)
     try {
       const url = initialSurvey?.id ? `/api/surveys/${initialSurvey.id}` : "/api/surveys"
-
       const method = initialSurvey?.id ? "PUT" : "POST"
 
       const response = await fetch(url, {
@@ -191,10 +207,25 @@ export default function SurveyBuilder({ initialSurvey }: SurveyBuilderProps) {
                       <SelectItem value="email">Email</SelectItem>
                       <SelectItem value="number">Number</SelectItem>
                       <SelectItem value="select">Multiple Choice</SelectItem>
+                      <SelectItem value="satisfaction">Satisfaction Rating</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
+
+              {question.type === "satisfaction" && (
+                <div>
+                  <label className="block text-sm font-medium mb-2">Satisfaction Prompt *</label>
+                  <Input
+                    value={question.satisfactionPrompt || ""}
+                    onChange={(e) => updateQuestion(question.id, { satisfactionPrompt: e.target.value })}
+                    placeholder="e.g., How satisfied are you with our service?"
+                  />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    This will be displayed above the satisfaction rating options
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center space-x-2">
                 <input
@@ -229,6 +260,21 @@ export default function SurveyBuilder({ initialSurvey }: SurveyBuilderProps) {
                       Add Option
                     </Button>
                   </div>
+                </div>
+              )}
+
+              {question.type === "satisfaction" && (
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle className="h-4 w-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-800">Satisfaction Rating Preview</span>
+                  </div>
+                  <p className="text-sm text-blue-700">
+                    Customers will see: "{question.satisfactionPrompt || "How satisfied are you?"}"
+                  </p>
+                  <p className="text-sm text-blue-600 mt-1">
+                    Rating options: Very Dissatisfied, Dissatisfied, Neutral, Satisfied, Very Satisfied
+                  </p>
                 </div>
               )}
             </CardContent>

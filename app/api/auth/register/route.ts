@@ -25,32 +25,42 @@ export async function POST(request: NextRequest) {
         email: email.toLowerCase(),
         password: hashedPassword,
         name,
-        business: businessName
-          ? {
-              create: {
-                name: businessName,
-              },
-            }
-          : undefined,
+        business: 
+        {
+          create: {
+            name: businessName,
+            id: undefined, // placeholder, will update below
+          },
+        }
       },
       include: { business: true },
     })
 
-    const token = await generateToken(user.id)
+    let updatedUser = user
+    if (user.business) {
+      const updatedBusiness = await prisma.business.update({
+        where: { id: user.business.id },
+        data: { id: user.id },
+      })
+      updatedUser = { ...user, business: updatedBusiness }
+    }
+
+
+    const token = await generateToken(updatedUser.id)
 
     const response = NextResponse.json({
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        business: user.business,
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        business: updatedUser.business,
       },
     })
 
     response.cookies.set("auth-token", token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      secure: false,
+      sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7, // 7 days
     })
 

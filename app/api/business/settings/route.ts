@@ -1,48 +1,67 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getAuthenticatedUser } from "@/lib/middleware"
-import { businessSettingsSchema } from "@/lib/validations"
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request)
-    if (!user || !user.businessId) {
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const business = await prisma.business.findUnique({
-      where: { id: user.businessId },
-    })
-
-    if (!business) {
+    const userBusiness = user.business
+    if (!userBusiness) {
       return NextResponse.json({ error: "Business not found" }, { status: 404 })
     }
 
-    return NextResponse.json({ business })
+    return NextResponse.json({
+        businessData: { 
+            name: userBusiness.name || "", 
+            email: userBusiness.email || "", 
+            website: userBusiness.website || "", 
+            description: userBusiness.description || "",
+            phone: userBusiness.phone || "", 
+            address: userBusiness.address || "" 
+        }
+    }, { status: 200 })
+
   } catch (error) {
-    console.error("Get business settings error:", error)
-    return NextResponse.json({ error: "Failed to fetch business settings" }, { status: 500 })
+    console.error("Get customers error:", error)
+    return NextResponse.json({ error: "Failed to fetch customers" }, { status: 500 })
   }
 }
 
-export async function PUT(request: NextRequest) {
+
+export async function POST(request: NextRequest) {
   try {
+    const { name, email, website, description, phone, address } = await request.json()
     const user = await getAuthenticatedUser(request)
-    if (!user || !user.businessId) {
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const body = await request.json()
-    const validatedData = businessSettingsSchema.parse(body)
-
-    const business = await prisma.business.update({
-      where: { id: user.businessId },
-      data: validatedData,
+    const userBusiness = user.business
+    if (!userBusiness) {
+      return NextResponse.json({ error: "Business not found" }, { status: 404 })
+    }
+    const updatedBusiness = await prisma.business.update({
+      where: { id: userBusiness.id },
+      data: {
+        name,
+        email,
+        website,
+        description,
+        phone,
+        address,
+      },
     })
 
-    return NextResponse.json({ business })
+    return NextResponse.json({
+      status: "success",
+    }, { status: 200 })
+
   } catch (error) {
-    console.error("Update business settings error:", error)
-    return NextResponse.json({ error: "Failed to update business settings" }, { status: 500 })
+    console.error("Get customers error:", error)
+    return NextResponse.json({ error: "Failed to fetch customers" }, { status: 500 })
   }
 }

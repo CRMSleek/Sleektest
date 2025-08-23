@@ -1,57 +1,17 @@
 "use client"
 import type React from "react"
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useAuth } from "@/components/auth-provider"
 import Link from "next/link"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { BarChart3, Users, FileText, Settings, LogOut, Mail } from "lucide-react"
 import logo from "../../public/logo.png"
 
-interface User {
-  id: string
-  email: string
-  name: string
-  business?: {
-    id: string
-    name: string
-  }
-}
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    checkAuth()
-  }, [])
-
-  const checkAuth = async () => {
-    try {
-      const response = await fetch("/api/auth/me")
-      if (response.ok) {
-        const data = await response.json()
-        setUser(data.user)
-      } else {
-        router.push("/login")
-      }
-    } catch (error) {
-      console.error("Auth check error:", error)
-      router.push("/login")
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { user, loading, logout } = useAuth()
 
   const handleLogout = async () => {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" })
-      router.push("/")
-      router.refresh()
-    } catch (error) {
-      console.error("Logout error:", error)
-    }
+    await logout()
   }
 
   if (loading) {
@@ -106,13 +66,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               <FileText className="h-5 w-5" />
               <span>Surveys</span>
-            </Link>
-            <Link
-              href="/dashboard/email"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-gray-700 transition-colors text-white"
-              >
-              <Mail className="h-5 w-5" />
-              <span>Email</span>
             </Link>
             <Link
               href="/dashboard/customers"

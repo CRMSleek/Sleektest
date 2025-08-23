@@ -1,72 +1,73 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getAuthenticatedUser } from "@/lib/middleware"
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+import OpenAI from "openai"
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1"
+})
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request)
-    if (!user || !user.businessId) {
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Get business data for AI analysis
+    const businessId = user.business?.id
+    if (!businessId) {
+      return NextResponse.json({ error: "Business not found" }, { status: 404 })
+    }
+
     const [customers, surveys, responses] = await Promise.all([
       prisma.customer.findMany({
-        where: { businessId: user.businessId },
-        select: {
-          age: true,
-          location: true,
-          preferences: true,
-          createdAt: true,
-        },
+        where: { businessId },
+        select: { age: true, location: true, data: true, createdAt: true },
       }),
       prisma.survey.findMany({
-        where: { businessId: user.businessId },
-        select: {
-          title: true,
-          status: true,
-          createdAt: true,
-          _count: {
-            select: { responses: true },
-          },
-        },
+        where: { userId: user.id },
+        select: { title: true, description: true, isActive: true, createdAt: true, _count: { select: { responses: true } } },
       }),
       prisma.surveyResponse.findMany({
-        where: {
-          survey: { businessId: user.businessId },
-        },
-        select: {
-          responses: true,
-          submittedAt: true,
-        },
-        take: 100, // Limit for AI processing
+        where: { businessId },
+        select: { answers: true, submittedAt: true },
+        take: 100,
       }),
     ])
 
-    // Prepare data summary for AI
+    if (customers.length === 0 && surveys.length === 0 && responses.length === 0) {
+      return NextResponse.json({
+        insights: [
+          {
+            title: "No Data Available",
+            description: "No customer, survey, or response data found to generate insights.",
+            type: "trend",
+            priority: "low",
+          },
+        ],
+      })
+    }
+
+    // Prepare summary for AI
     const dataSummary = {
       totalCustomers: customers.length,
       totalSurveys: surveys.length,
       totalResponses: responses.length,
-      customerAges: customers.filter((c) => c.age).map((c) => c.age),
-      customerLocations: customers.filter((c) => c.location).map((c) => c.location),
-      recentFeedback: responses.slice(0, 20).map((r) => {
-        const resp = r.responses as any
-        return Object.values(resp).join(" ")
-      }),
-      surveyPerformance: surveys.map((s) => ({
+      customerAges: customers.filter(c => c.age !== null).map(c => c.age),
+      customerLocations: customers.filter(c => c.location).map(c => c.location),
+      recentFeedback: responses.slice(0, 20).map(r => Object.values(r.answers as Record<string, string>).join(" ")),
+      surveyPerformance: surveys.map(s => ({
         title: s.title,
         responses: s._count.responses,
-        status: s.status,
+        isActive: s.isActive,
       })),
     }
 
     // Generate AI insights
-    const { text } = await generateText({
-      model: openai("gpt-4.1-mini"),
-      prompt: `Analyze this customer data and provide 3-4 actionable business insights:
+    const response = await client.responses.create({
+      model: "openai/gpt-oss-20b",
+      input: `Analyze this customer data and provide 3-4 actionable business insights:
 
 Customer Data Summary:
 - Total Customers: ${dataSummary.totalCustomers}
@@ -88,15 +89,15 @@ Please provide insights in this JSON format:
     }
   ]
 }
-
 Focus on trends, opportunities, demographics, and actionable recommendations.`,
     })
 
+    const text = response.output_text.replace(/```json/g, "").replace(/```/g, "")
+
     try {
       const insights = JSON.parse(text)
-      return NextResponse.json(insights)
-    } catch (parseError) {
-      // Fallback if AI doesn't return valid JSON
+      return NextResponse.json({ insights: insights.insights ?? insights })
+    } catch {
       return NextResponse.json({
         insights: [
           {
@@ -110,8 +111,6 @@ Focus on trends, opportunities, demographics, and actionable recommendations.`,
     }
   } catch (error) {
     console.error("Generate insights error:", error)
-
-    // Return fallback insights if AI fails
     return NextResponse.json({
       insights: [
         {

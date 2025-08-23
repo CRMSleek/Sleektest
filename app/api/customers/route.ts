@@ -15,12 +15,13 @@ export async function GET(request: NextRequest) {
 
     const customers = await prisma.customer.findMany({
       where: {
-        businessId: user.businessId,
+        businessId: user.business.id,
         OR: search
           ? [
               { name: { contains: search, mode: "insensitive" } },
               { email: { contains: search, mode: "insensitive" } },
               { location: { contains: search, mode: "insensitive" } },
+              { phone: { contains: search, mode: "insensitive" } },
             ]
           : undefined,
       },
@@ -48,7 +49,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request)
-    if (!user || !user.businessId) {
+    if (!user || !user.business.id) {
       return NextResponse.json({ error: "Unauthorized 5" }, { status: 401 })
     }
 
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
     const customer = await prisma.customer.create({
       data: {
         ...validatedData,
-        businessId: user.businessId,
+        businessId: user.business.id,
       },
     })
 

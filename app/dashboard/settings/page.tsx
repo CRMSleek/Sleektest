@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAuth } from "@/components/auth-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,7 +24,12 @@ export default function SettingsPage() {
   }
   const user = useAuth()
   const { toast } = useToast()
+  const [taskDone, setTaskDone] = useState("")
+  const [appError, setAppError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState("")
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
 
   const [businessSettings, setBusinessSettings] = useState({
     name: user?.name || "",
@@ -42,22 +47,24 @@ export default function SettingsPage() {
     marketingEmails: false,
   })
 
+
   const handleSaveBusinessSettings = async () => {
     setIsLoading(true)
     try {
-      // This would be replaced with an actual API call
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      toast({
-        title: "Settings saved",
-        description: "Your business settings have been updated successfully.",
+      const response = await fetch("/api/business/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(businessSettings),
       })
+      if (!response.ok) {
+        throw new Error("Failed to save business settings")
+      }
+      setAppError("")
+      setTaskDone("Business settings updated successfully")
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "There was an error saving your settings.",
-        variant: "destructive",
-      })
+      setAppError("Failed to save business settings")
     } finally {
       setIsLoading(false)
     }
@@ -66,23 +73,106 @@ export default function SettingsPage() {
   const handleSaveNotificationSettings = async () => {
     setIsLoading(true)
     try {
-      // This would be replaced with an actual API call
       await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      toast({
-        title: "Notifications updated",
-        description: "Your notification preferences have been saved.",
-      })
+      setAppError("")
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "There was an error updating your notifications.",
-        variant: "destructive",
-      })
+      setAppError("Failed to update notification settings")
     } finally {
       setIsLoading(false)
     }
   }
+
+  useEffect(() => {
+    fetchBusinessSettings()
+  }, [])
+
+  const fetchBusinessSettings = async () => {
+    try {
+      const response = await fetch("/api/business/settings")
+      if (!response.ok) {
+        throw new Error("Failed to fetch business settings")
+      }
+      const data = await response.json()
+      setBusinessSettings({
+        name: data.businessData.name || "",
+        email: data.businessData.email || "",
+        website: data.businessData.website || "",
+        phone: data.businessData.phone || "",
+        address: data.businessData.address || "",
+        description: data.businessData.description || "",
+      })
+      console.log("Business settings fetched successfully:", data.businessData)
+    } catch (error) {
+      console.error("Error fetching business settings:", error)
+    }
+  }
+
+  const resetPassword = async () => {
+    if (currentPassword === "" || newPassword === "") {
+      setAppError("Current password and new password are required")
+      return
+    }
+    if (newPassword.length < 8) {
+      setAppError("New password must be at least 8 characters long")
+      return
+    }
+    if (newPassword === currentPassword) {
+      setAppError("New password must be different from current password")
+      return
+    }
+    if (newPassword !== confirmPassword) {   
+      setAppError("New password and confirmation password do not match")
+      return
+    }
+    setAppError("")
+    setIsLoading(true)
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+          confirmPassword,
+        }),
+      })
+      const data = await response.json()
+      setTaskDone("Password saved successfully")
+      if (!response.ok) {
+        setAppError(data.error)
+      }
+    } catch (error) {
+      setAppError("Failed to update password. Internal server error.")
+    }
+  }
+
+  const handleTabChange = () => {
+    setAppError("")
+    setTaskDone("")
+    setIsLoading(false)
+  }
+
+  useEffect(() => {
+    if (taskDone) {
+      const timer = setTimeout(() => {
+        setTaskDone("");
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [taskDone]);
+
+  useEffect(() => {
+    if (appError) {
+      const timer = setTimeout(() => {
+        setTaskDone("");
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [appError]);
 
   return (
     <div className="space-y-6 p-6">
@@ -95,11 +185,11 @@ export default function SettingsPage() {
         <p className="text-muted-foreground">Manage your account and business preferences</p>
       </motion.div>
 
-      <Tabs defaultValue="business">
+      <Tabs defaultValue="business" onValueChange={handleTabChange}>
         <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ duration: 0.6 }}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="business">Business</TabsTrigger>
-            <TabsTrigger value="notifications">Notifications</TabsTrigger>
+            {/*<TabsTrigger value="notifications">Notifications</TabsTrigger>*/}
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
@@ -119,7 +209,7 @@ export default function SettingsPage() {
                     <Input
                       id="business-name"
                       value={businessSettings.name}
-                      placeholder="SleekCRM"
+                      placeholder="Enter your business name"
                       onChange={(e) => setBusinessSettings({ ...businessSettings, name: e.target.value })}
                     />
                   </div>
@@ -128,7 +218,7 @@ export default function SettingsPage() {
                     <Input
                       id="business-email"
                       type="email"
-                      placeholder="sleek@crm.com"
+                      placeholder="Enter your email"
                       value={businessSettings.email}
                       onChange={(e) => setBusinessSettings({ ...businessSettings, email: e.target.value })}
                     />
@@ -139,7 +229,7 @@ export default function SettingsPage() {
                     <Label htmlFor="business-website">Website</Label>
                     <Input
                       id="business-website"
-                      placeholder="https://sleek.crm"
+                      placeholder="Enter your website URL"
                       value={businessSettings.website}
                       onChange={(e) => setBusinessSettings({ ...businessSettings, website: e.target.value })}
                     />
@@ -148,7 +238,7 @@ export default function SettingsPage() {
                     <Label htmlFor="business-phone">Phone</Label>
                     <Input
                       id="business-phone"
-                      placeholder="+1 (555) 123-4567"
+                      placeholder="Enter your business phone number"
                       value={businessSettings.phone}
                       onChange={(e) => setBusinessSettings({ ...businessSettings, phone: e.target.value })}
                     />
@@ -158,7 +248,7 @@ export default function SettingsPage() {
                   <Label htmlFor="business-description">Description</Label>
                   <Textarea
                     id="business-description"
-                    placeholder="An upcoming minimalistic, free, and easy-to-use customer relationship management platform."
+                    placeholder="Enter your business description"
                     rows={3}
                     value={businessSettings.description}
                     onChange={(e) => setBusinessSettings({ ...businessSettings, description: e.target.value })}
@@ -168,12 +258,14 @@ export default function SettingsPage() {
                   <Label htmlFor="business-address">Address</Label>
                   <Textarea
                     id="business-address"
-                    placeholder="1234 56th Street, Overland Park, KS"
+                    placeholder="Enter your business address"
                     rows={2}
                     value={businessSettings.address}
                     onChange={(e) => setBusinessSettings({ ...businessSettings, address: e.target.value })}
                   />
                 </div>
+                {appError && <div className="text-red-500 text-sm">{appError}</div>}
+                {taskDone && <div className="text-green-500 text-sm">{taskDone}</div>}
               </CardContent>
               <CardFooter>
                 <Button onClick={handleSaveBusinessSettings} disabled={isLoading}>
@@ -263,24 +355,35 @@ export default function SettingsPage() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="current-password">Current Password</Label>
-                  <Input id="current-password" type="password" />
+                  <Input 
+                  id="current-password" 
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  type="password" />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="new-password">New Password</Label>
-                  <Input id="new-password" type="password" />
+                  <Input 
+                  id="new-password" 
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  type="password" />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="confirm-password">Confirm New Password</Label>
-                  <Input id="confirm-password" type="password" />
+                  <Input 
+                  id="confirm-password"
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  type="password" />
                 </div>
+                {appError && <div className="text-red-500 text-sm">{appError}</div>}
+                {taskDone && <div className="text-green-500 text-sm">{taskDone}</div>}
               </CardContent>
               <CardFooter>
-                <Button>Update Password</Button>
+                <Button onClick={resetPassword}>Update Password</Button>
               </CardFooter>
             </Card>
           </motion.div>
           <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.24, duration: 0.6 }}>
-            <Card>
+            {/*<Card>
               <CardHeader>
                 <CardTitle>Two-Factor Authentication</CardTitle>
                 <CardDescription>Add an extra layer of security to your account</CardDescription>
@@ -292,9 +395,9 @@ export default function SettingsPage() {
                     <p className="text-sm text-muted-foreground">Secure your account with 2FA</p>
                   </div>
                   <Button variant="outline">Enable 2FA</Button>
-                </div>
+                </div>*
               </CardContent>
-            </Card>
+            </Card>*/}
           </motion.div>
         </TabsContent>
 

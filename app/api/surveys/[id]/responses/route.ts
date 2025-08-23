@@ -28,6 +28,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: "Survey not found" }, { status: 404 })
     }
 
+    if (!survey.user.business) {
+      return NextResponse.json({ error: "Business not found" }, { status: 404 })
+    }
+
     let customer = null
 
     // Create or find customer if customer info provided
@@ -39,12 +43,18 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         update: {
           name: customerInfo.name || customer?.name,
           phone: customerInfo.phone || customer?.phone,
+          location: customerInfo.location || customer?.location,
+          age: customerInfo.age || customer?.age,
+          notes: customerInfo.notes || customer?.notes,
           data: customerInfo,
         },
         create: {
           email: customerInfo.email,
           name: customerInfo.name,
           phone: customerInfo.phone,
+          location: customerInfo.location,
+          age: customerInfo.age,
+          notes: customerInfo.notes,
           data: customerInfo,
           businessId: survey.user.business.id,
         },
@@ -56,16 +66,15 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       data: {
         answers,
         surveyId: params.id,
-        customerId: customer?.id,
+        businessId: survey.user.business.id,
+        customerId: customer?.id || null,
+        submittedAt: new Date(),
       },
     })
 
-    return NextResponse.json({
-      success: true,
-      responseId: response.id,
-    })
+    return NextResponse.json({ success: true, responseId: response.id })
   } catch (error) {
-    console.error("Submit survey response error:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("Create survey response error:", error)
+    return NextResponse.json({ error: "Failed to submit survey response" }, { status: 500 })
   }
 }

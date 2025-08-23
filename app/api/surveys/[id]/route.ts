@@ -9,9 +9,11 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
     }
 
+    const { id } = await params
+
     const survey = await prisma.survey.findFirst({
       where: {
-        id: params.id,
+        id: id,
         userId: user.id,
       },
       include: {
@@ -42,7 +44,11 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
     }
 
-    const { title, description, questions, isActive } = await request.json()
+    const { title, description, questions } = await request.json()
+
+    if (!title || !questions || !Array.isArray(questions)) {
+      return NextResponse.json({ error: "Title and questions are required" }, { status: 400 })
+    }
 
     const survey = await prisma.survey.updateMany({
       where: {
@@ -53,7 +59,6 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
         title,
         description,
         questions,
-        isActive,
       },
     })
 

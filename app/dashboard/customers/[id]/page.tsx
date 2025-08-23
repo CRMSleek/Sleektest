@@ -1,244 +1,376 @@
 "use client"
 
-import { useParams } from "next/navigation"
+import { useState, useEffect } from "react"
+import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { ArrowLeft, Mail, MapPin, Phone } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useToast } from "@/components/ui/use-toast"
+import { ArrowLeft, Edit, Save, X, Calendar, MapPin, Phone, Mail, User } from "lucide-react"
 import Link from "next/link"
-import { motion } from 'framer-motion'
 
-// Mock data for a customer profile
-const customerProfiles = {
-  "1": {
-    id: "1",
-    name: "Alice Johnson",
-    email: "alice.johnson@example.com",
-    phone: "+1 (555) 123-4567",
-    location: "New York, USA",
-    age: 34,
-    joinedDate: "May 10, 2025",
-    preferences: {
-      productInterests: ["Premium Plan", "Mobile App"],
-      communicationPreference: "Email",
-      frequency: "Weekly",
-    },
-    surveyResponses: [
-      {
-        id: "sr1",
-        surveyName: "Customer Satisfaction",
-        date: "June 15, 2025",
-        rating: 4.5,
-        feedback:
-          "Great service overall. The mobile app could use some improvements in the user interface, but the core functionality works well.",
-      },
-      {
-        id: "sr2",
-        surveyName: "Product Feedback",
-        date: "May 20, 2025",
-        rating: 4.0,
-        feedback:
-          "I like the new features added in the latest update. Would love to see more customization options in the future.",
-      },
-    ],
-    notes:
-      "Alice is a loyal customer who has been with us since the beginning. She prefers email communication and is interested in our premium offerings.",
-  },
+interface Customer {
+  id: string
+  name: string
+  email: string
+  phone?: string
+  location?: string
+  age?: number
+  notes?: string
+  createdAt: string
+  responses: Array<{
+    id: string
+    survey: { title: string }
+    submittedAt: string
+    answers: any
+  }>
 }
 
-export default function CustomerProfilePage() {
-  const fadeUp = {
-    hidden: { opacity: 0, y: 30 },
-    visible: { opacity: 1, y: 0 },
+export default function CustomerDetailPage() {
+  const params = useParams()
+  const router = useRouter()
+  const { toast } = useToast()
+  const [customer, setCustomer] = useState<Customer | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    location: "",
+    age: "",
+    notes: "",
+  })
+
+  useEffect(() => {
+    if (params.id) {
+      fetchCustomer(params.id as string)
+    }
+  }, [params.id])
+
+  const fetchCustomer = async (id: string) => {
+    try {
+      const response = await fetch(`/api/customers/${id}`)
+      if (response.ok) {
+        const data = await response.json()
+        setCustomer(data.customer)
+        setFormData({
+          name: data.customer.name || "",
+          email: data.customer.email || "",
+          phone: data.customer.phone || "",
+          location: data.customer.location || "",
+          age: data.customer.age?.toString() || "",
+          notes: data.customer.notes || "",
+        })
+      } else {
+        toast({
+          title: "Error",
+          description: "Failed to fetch customer",
+          variant: "destructive",
+        })
+        router.push("/dashboard/customers")
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to fetch customer",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
   }
-  const fade = {
-    hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { duration: 0.7 } },
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+
+    try {
+      const response = await fetch(`/api/customers/${customer!.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...formData,
+          age: formData.age ? parseInt(formData.age) : undefined,
+        }),
+      })
+
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: "Customer updated successfully",
+        })
+        setEditing(false)
+        fetchCustomer(customer!.id)
+      } else {
+        const error = await response.json()
+        throw new Error(error.error || "Failed to update customer")
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to update customer",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
   }
-  const { id } = useParams()
-  const customerId = typeof id === "string" ? id : id[0]
-  const customer = customerProfiles[customerId as keyof typeof customerProfiles]
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+  }
+
+  const handleDelete = async () => {
+    if (!confirm("Are you sure you want to delete this customer? This action cannot be undone.")) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/customers/${customer!.id}`, {
+        method: "DELETE",
+      })
+
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: "Customer deleted successfully",
+        })
+        router.push("/dashboard/customers")
+      } else {
+        throw new Error("Failed to delete customer")
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete customer",
+        variant: "destructive",
+      })
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="h-8 w-48 bg-gray-200 rounded animate-pulse" />
+        <div className="h-64 bg-gray-200 rounded animate-pulse" />
+      </div>
+    )
+  }
 
   if (!customer) {
     return (
-      <div className="flex flex-col items-center justify-center h-[50vh]">
-        <h1 className="text-2xl font-bold mb-4">Customer not found</h1>
-        <Button asChild>
-          <Link href="/dashboard/customers">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Customers
-          </Link>
-        </Button>
+      <div className="p-6">
+        <p className="text-muted-foreground">Customer not found</p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6 m-6">
-        <motion.div initial="hidden" animate="visible" variants={fade} transition={{ duration: 0.6 }} className="flex items-center gap-4">
-        <Button variant="outline" size="icon" asChild>
-          <Link href="/dashboard/customers">
+    <div className="space-y-6 p-6">
+      <div className="flex items-center gap-4">
+        <Link href="/dashboard/customers">
+          <Button variant="ghost" size="icon">
             <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <h1 className="text-3xl font-bold tracking-tight">Customer Profile</h1>
-      </motion.div>
+          </Button>
+        </Link>
+        <div className="flex-1">
+          <h1 className="text-3xl font-bold tracking-tight">{customer.name}</h1>
+          <p className="text-muted-foreground">{customer.email}</p>
+        </div>
+        <div className="flex gap-2">
+          {editing ? (
+            <>
+              <Button onClick={() => setEditing(false)} variant="outline">
+                <X className="mr-2 h-4 w-4" />
+                Cancel
+              </Button>
+              <Button onClick={handleSubmit} disabled={loading}>
+                {loading ? (
+                  <>
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save
+                  </>
+                )}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => setEditing(true)}>
+                <Edit className="mr-2 h-4 w-4" />
+                Edit
+              </Button>
+              <Button onClick={handleDelete} variant="destructive">
+                Delete
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
 
-      <div className="grid gap-6 md:grid-cols-7">
-       <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ duration: 0.6 }} className="md:col-span-2">
-        <Card className="md:col-span-2 h-full">
-        
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card>
           <CardHeader>
-            <div className="flex flex-col items-center space-y-4">
-              <Avatar className="h-24 w-24">
-                <AvatarFallback className="text-2xl">
-                  {customer.name
-                    .split(" ")
-                    .map((n) => n[0])
-                    .join("")}
-                </AvatarFallback>
-              </Avatar>
-              <div className="space-y-1 text-center">
-                <h2 className="text-2xl font-bold">{customer.name}</h2>
-                <p className="text-sm text-muted-foreground">Customer since {customer.joinedDate}</p>
-              </div>
-            </div>
+            <CardTitle>Customer Information</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">{customer.email}</span>
+          <CardContent className="space-y-4">
+            {editing ? (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Name *</Label>
+                  <Input
+                    id="name"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleChange}
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email *</Label>
+                  <Input
+                    id="email"
+                    name="email"
+                    type="email"
+                    value={formData.email}
+                    onChange={handleChange}
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Phone</Label>
+                  <Input
+                    id="phone"
+                    name="phone"
+                    value={formData.phone}
+                    onChange={handleChange}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="age">Age</Label>
+                  <Input
+                    id="age"
+                    name="age"
+                    type="number"
+                    min="1"
+                    max="120"
+                    value={formData.age}
+                    onChange={handleChange}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="location">Location</Label>
+                  <Input
+                    id="location"
+                    name="location"
+                    value={formData.location}
+                    onChange={handleChange}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea
+                    id="notes"
+                    name="notes"
+                    value={formData.notes}
+                    onChange={handleChange}
+                    rows={3}
+                  />
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">{customer.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <span>{customer.email}</span>
+                </div>
+                {customer.phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="h-4 w-4 text-muted-foreground" />
+                    <span>{customer.phone}</span>
+                  </div>
+                )}
+                {customer.location && (
+                  <div className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4 text-muted-foreground" />
+                    <span>{customer.location}</span>
+                  </div>
+                )}
+                {customer.age && (
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">Age:</span>
+                    <span>{customer.age}</span>
+                  </div>
+                )}
+                {customer.notes && (
+                  <div className="space-y-2">
+                    <span className="font-medium">Notes:</span>
+                    <p className="text-sm text-muted-foreground">{customer.notes}</p>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Customer since {new Date(customer.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Phone className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">{customer.phone}</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <MapPin className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">{customer.location}</span>
-              </div>
-              <div className="pt-4">
-                <Button className="w-full">Send Survey</Button>
-              </div>
-            </div>
+            )}
           </CardContent>
         </Card>
-        </motion.div>
-        
 
-        <div className="md:col-span-5 space-y-6">
-          <Tabs defaultValue="overview">
-            <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.12, duration: 0.6 }}>
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="surveys">Survey Responses</TabsTrigger>
-              <TabsTrigger value="preferences">Preferences</TabsTrigger>
-            </TabsList>
-            </motion.div>
-            <TabsContent value="overview" className="space-y-6 pt-4">
-              <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.24, duration: 0.6 }}>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Customer Summary</CardTitle>
-                  <CardDescription>Key information about {customer.name}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="font-medium">Age</h3>
-                      <p>{customer.age} years old</p>
+        <Card>
+          <CardHeader>
+            <CardTitle>Survey Responses</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              {customer.responses.length} response{customer.responses.length !== 1 ? 's' : ''}
+            </p>
+          </CardHeader>
+          <CardContent>
+            {customer.responses.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">
+                No survey responses yet
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {customer.responses.map((response) => (
+                  <div key={response.id} className="p-3 border rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium">{response.survey.title}</h4>
+                      <Badge variant="secondary">
+                        {new Date(response.submittedAt).toLocaleDateString()}
+                      </Badge>
                     </div>
-                    <div>
-                      <h3 className="font-medium">Location</h3>
-                      <p>{customer.location}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Notes</h3>
-                      <p className="text-sm text-muted-foreground">{customer.notes}</p>
-                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {Object.keys(response.answers).length} questions answered
+                    </p>
                   </div>
-                </CardContent>
-              </Card>
-              </motion.div>
-              <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.36, duration: 0.6 }}>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>Latest interactions with {customer.name}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {customer.surveyResponses.map((response) => (
-                      <div key={response.id} className="border-b pb-4 last:border-0 last:pb-0">
-                        <div className="flex items-center justify-between">
-                          <h3 className="font-medium">{response.surveyName}</h3>
-                          <span className="text-sm text-muted-foreground">{response.date}</span>
-                        </div>
-                        <p className="text-sm mt-1">Rating: {response.rating}/5</p>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-              </motion.div>
-            </TabsContent>
-            
-
-            <TabsContent value="surveys" className="space-y-6 pt-4">
-              {customer.surveyResponses.map((response, i) => (
-                <motion.div key={i} initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.06 * i, duration: 0.4 }}>
-                  <Card key={response.id}>
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle>{response.surveyName}</CardTitle>
-                        <span className="text-sm text-muted-foreground">{response.date}</span>
-                      </div>
-                      <CardDescription>Rating: {response.rating}/5</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-sm">{response.feedback}</p>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
-            </TabsContent>
-
-            <TabsContent value="preferences" className="space-y-6 pt-4">
-              <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.12, duration: 0.6 }}>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Customer Preferences</CardTitle>
-                  <CardDescription>Preferences and interests for {customer.name}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="font-medium">Product Interests</h3>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {customer.preferences.productInterests.map((interest) => (
-                          <div key={interest} className="rounded-full bg-secondary px-3 py-1 text-xs">
-                            {interest}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Communication Preference</h3>
-                      <p>{customer.preferences.communicationPreference}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Contact Frequency</h3>
-                      <p>{customer.preferences.frequency}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              </motion.div>
-            </TabsContent>
-          </Tabs>
-        </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

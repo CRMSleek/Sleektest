@@ -50,7 +50,7 @@ export default function AnalyticsPage() {
                   <CardHeader>
                     <CardTitle>{i === 0 ? "Response Trends" : "Customer Growth"}</CardTitle>
                     <CardDescription>
-                      {i === 0 ? "Survey responses over time" : "New customers acquired monthly"}
+                      {i === 0 ? "Survey responses over time" : "New customers acquired"}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>

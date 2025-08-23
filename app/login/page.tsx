@@ -3,15 +3,15 @@
 import type React from "react"
 
 import { useState } from "react"
-import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { BarChart3 } from "lucide-react"
+import { useAuth } from "@/components/auth-provider"
 
 export default function LoginPage() {
-  const router = useRouter()
+  const { login } = useAuth()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
@@ -23,23 +23,10 @@ export default function LoginPage() {
     setError("")
 
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password }),
-      })
-      if (response.ok) {
-        router.push("/dashboard")
-        router.refresh()
-      } else {
-        const data = await response.json()
-        setError(data.error || "Login failed")
-      }
+      await login(email, password)
     } catch (error) {
       console.error("Login error:", error)
-      setError("Something went wrong. Please try again.")
+      setError(error instanceof Error ? error.message : "Something went wrong. Please try again.")
     } finally {
       setLoading(false)
     }

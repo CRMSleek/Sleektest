@@ -66,7 +66,7 @@ async function main() {
   // Create a sample survey
   const survey = await prisma.survey.create({
     data: {
-      businessId: business.id,
+      userId: business.id,
       title: "Customer Satisfaction Survey",
       description: "Help us improve our services by sharing your feedback",
       status: "ACTIVE",
