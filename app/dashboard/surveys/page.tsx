@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Plus, Eye, Edit, Trash2, FileText } from "lucide-react"
+import { Plus, Eye, Edit, Trash2, FileText, PencilLine } from "lucide-react"
 import { motion } from "framer-motion"
 
 interface Survey {
@@ -142,7 +142,7 @@ export default function SurveysPage() {
                       {survey.isActive ? "Active" : "Inactive"}
                     </span>
                   </div>
-                  <div className="flex space-x-2">
+                  <div className="flex space-x-1">
                     <Link href={`/survey/${survey.id}`} target="_blank">
                       <Button variant="outline" size="sm">
                         <Eye className="h-4 w-4 mr-1" />
@@ -155,6 +155,12 @@ export default function SurveysPage() {
                         Edit
                       </Button>
                     </Link>
+                    {/*<Link href={`/dashboard/surveys/${survey.id}/responses`}>
+                      <Button variant="outline" size="sm">
+                          <PencilLine className="h-4 w-4 mr-1" />
+                          Responses
+                      </Button>
+                    </Link>*/}
                     <Button variant="outline" size="sm" onClick={() => deleteSurvey(survey.id)}>
                       <Trash2 className="h-4 w-4 mr-1" />
                       Delete
