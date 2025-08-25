@@ -86,6 +86,24 @@ export default function SettingsPage() {
     fetchBusinessSettings()
   }, [])
 
+  useEffect(() => {
+    // Ensure email is populated from auth/me as a fallback
+    const ensureEmail = async () => {
+      try {
+        if (!businessSettings.email) {
+          const res = await fetch('/api/auth/me')
+          if (res.ok) {
+            const data = await res.json()
+            if (data?.user?.email) {
+              setBusinessSettings((prev) => ({ ...prev, email: data.user.email }))
+            }
+          }
+        }
+      } catch {}
+    }
+    ensureEmail()
+  }, [])
+
   const fetchBusinessSettings = async () => {
     try {
       const response = await fetch("/api/business/settings")

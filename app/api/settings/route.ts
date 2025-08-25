@@ -1,8 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { verifyPassword, hashPassword } from "@/lib/auth"
-import { getCurrentUser } from "@/lib/auth"
-import bcrypt from "bcryptjs"
+import { supabase } from "@/lib/supabase/client"
+import { verifyPassword, hashPassword, getCurrentUser } from "@/lib/supabase/auth"
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,12 +14,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Current password is incorrect" }, { status: 400 })
   }
 
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: {
+    const { error } = await supabase
+      .from('users')
+      .update({
         password: await hashPassword(newPassword),
-      },
-    })
+      })
+      .eq('id', user.id)
+
+    if (error) throw error
 
     return NextResponse.json({
       status: "success",

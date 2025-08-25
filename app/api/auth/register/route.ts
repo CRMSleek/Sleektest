@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { hashPassword, generateToken } from "@/lib/auth"
+import { createUser, generateToken } from "@/lib/supabase/auth"
+import { supabase } from "@/lib/supabase/client"
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,50 +10,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-    })
+    // Check if user already exists
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email.toLowerCase())
+      .single()
 
     if (existingUser) {
       return NextResponse.json({ error: "User already exists" }, { status: 400 })
     }
 
-    const hashedPassword = await hashPassword(password)
+    // Create user
+    const user = await createUser({ email, password, name })
 
-    const user = await prisma.user.create({
-      data: {
-        email: email.toLowerCase(),
-        password: hashedPassword,
-        name,
-        business: 
-        {
-          create: {
-            name: businessName,
-            id: undefined, // placeholder, will update below
-          },
-        }
-      },
-      include: { business: true },
-    })
-
-    let updatedUser = user
-    if (user.business) {
-      const updatedBusiness = await prisma.business.update({
-        where: { id: user.business.id },
-        data: { id: user.id },
-      })
-      updatedUser = { ...user, business: updatedBusiness }
+    // Create business if businessName is provided
+    let business = null
+    if (businessName) {
+      const { data: newBusiness } = await supabase
+        .from('businesses')
+        .insert({
+          name: businessName,
+          user_id: user.id
+        })
+        .select()
+        .single()
+      
+      business = newBusiness
     }
 
 
-    const token = await generateToken(updatedUser.id)
+    const token = await generateToken(user.id)
 
     const response = NextResponse.json({
       user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
-        name: updatedUser.name,
-        business: updatedUser.business,
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        business: business,
       },
     })
 

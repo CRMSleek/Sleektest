@@ -1,10 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { getAuthenticatedUser } from "@/lib/middleware"
+import { supabase } from "@/lib/supabase/client"
+import { getCurrentUser } from "@/lib/supabase/auth"
 
 export async function GET(request: NextRequest) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const user = await getCurrentUser(request)
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const { name, email, website, description, phone, address } = await request.json()
-    const user = await getAuthenticatedUser(request)
+    const user = await getCurrentUser(request)
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
@@ -44,17 +44,20 @@ export async function POST(request: NextRequest) {
     if (!userBusiness) {
       return NextResponse.json({ error: "Business not found" }, { status: 404 })
     }
-    const updatedBusiness = await prisma.business.update({
-      where: { id: userBusiness.id },
-      data: {
+    
+    const { error } = await supabase
+      .from('businesses')
+      .update({
         name,
         email,
         website,
         description,
         phone,
         address,
-      },
-    })
+      })
+      .eq('id', userBusiness.id)
+
+    if (error) throw error
 
     return NextResponse.json({
       status: "success",

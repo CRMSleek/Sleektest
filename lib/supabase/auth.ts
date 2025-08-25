@@ -1,7 +1,7 @@
 import * as jose from "jose"
 import bcrypt from "bcryptjs"
 import type { NextRequest } from "next/server"
-import { prisma } from "./prisma"
+import { supabase } from "./client"
 
 const JWT_SECRET = process.env.JWT_SECRET || "fallback-secret-key"
 
@@ -23,11 +23,8 @@ export async function generateToken(userId: string): Promise<string> {
 
 export async function verifyToken(token: string): Promise<{ userId: string } | null> {
   try {
-    console.log("verifyToken - JWT_SECRET available:", !!JWT_SECRET)
-    console.log("verifyToken - JWT_SECRET value:", JWT_SECRET ? JWT_SECRET.substring(0, 10) + "..." : "undefined")
     const secret = new TextEncoder().encode(JWT_SECRET)
     const { payload } = await jose.jwtVerify(token, secret)
-    console.log("verifyToken - Verification successful:", payload)
     return payload as { userId: string }
   } catch (error) {
     console.log("verifyToken - Verification failed:", error)
@@ -43,13 +40,60 @@ export async function getCurrentUser(request: NextRequest) {
     const payload = await verifyToken(token)
     if (!payload) return null
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
-      include: { business: true },
-    })
+    const { data: user, error } = await supabase
+      .from('users')
+      .select(`
+        *,
+        businesses (*)
+      `)
+      .eq('id', payload.userId)
+      .single()
 
-    return user
+    if (error || !user) return null
+
+    return {
+      ...user,
+      business: user.businesses?.[0] || null
+    }
   } catch {
     return null
+  }
+}
+
+export async function createUser(userData: {
+  email: string
+  password: string
+  name?: string
+}) {
+  const hashedPassword = await hashPassword(userData.password)
+  
+  const { data: user, error } = await supabase
+    .from('users')
+    .insert({
+      email: userData.email.toLowerCase(),
+      password: hashedPassword,
+      name: userData.name
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  return user
+}
+
+export async function findUserByEmail(email: string) {
+  const { data: user, error } = await supabase
+    .from('users')
+    .select(`
+      *,
+      businesses (*)
+    `)
+    .eq('email', email.toLowerCase())
+    .single()
+
+  if (error) return null
+  return {
+    ...user,
+    business: user.businesses?.[0] || null
   }
 }

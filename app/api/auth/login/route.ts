@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { verifyPassword, generateToken } from "@/lib/auth"
+import { verifyPassword, generateToken, findUserByEmail } from "@/lib/supabase/auth"
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,10 +9,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-      include: { business: true },
-    })
+    const user = await findUserByEmail(email)
 
     if (!user || !(await verifyPassword(password, user.password))) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 })

@@ -13,8 +13,8 @@ interface Survey {
   description?: string
   isActive: boolean
   createdAt: string
-  _count: {
-    responses: number
+  _count?: {
+    responses?: number
   }
 }
 
@@ -40,7 +40,7 @@ export default function SurveysPage() {
       const response = await fetch("/api/surveys")
       if (response.ok) {
         const data = await response.json()
-        setSurveys(data.surveys)
+        setSurveys(data.surveys || [])
       }
     } catch (error) {
       console.error("Fetch surveys error:", error)
@@ -133,7 +133,7 @@ export default function SurveysPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="flex justify-between items-center mb-4">
-                    <span className="text-sm text-gray-600">{survey._count.responses} responses</span>
+                    <span className="text-sm text-gray-600">{survey._count?.responses ?? 0} responses</span>
                     <span
                       className={`px-2 py-1 rounded-full text-xs ${
                         survey.isActive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
@@ -155,12 +155,6 @@ export default function SurveysPage() {
                         Edit
                       </Button>
                     </Link>
-                    {/*<Link href={`/dashboard/surveys/${survey.id}/responses`}>
-                      <Button variant="outline" size="sm">
-                          <PencilLine className="h-4 w-4 mr-1" />
-                          Responses
-                      </Button>
-                    </Link>*/}
                     <Button variant="outline" size="sm" onClick={() => deleteSurvey(survey.id)}>
                       <Trash2 className="h-4 w-4 mr-1" />
                       Delete

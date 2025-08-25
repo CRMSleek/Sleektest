@@ -1,5 +1,23 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { supabase } from "@/lib/supabase/client"
+
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    // Fetch responses for this survey (owner-facing; auth already enforced by middleware)
+    const { data: responses, error } = await supabase
+      .from('survey_responses')
+      .select('id, submitted_at, answers')
+      .eq('survey_id', params.id)
+      .order('submitted_at', { ascending: false })
+
+    if (error) throw error
+
+    return NextResponse.json({ responses: responses || [] })
+  } catch (error) {
+    console.error('List survey responses error:', error)
+    return NextResponse.json({ error: 'Failed to load responses' }, { status: 500 })
+  }
+}
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -10,67 +28,89 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
 
     // Check if survey exists and is active
-    const survey = await prisma.survey.findFirst({
-      where: {
-        id: params.id,
-        isActive: true,
-      },
-      include: {
-        user: {
-          include: {
-            business: true,
-          },
-        },
-      },
-    })
+    const { data: survey, error: surveyError } = await supabase
+      .from('surveys')
+      .select('id, user_id, is_active')
+      .eq('id', params.id)
+      .eq('is_active', true)
+      .single()
 
-    if (!survey) {
+    if (surveyError || !survey) {
       return NextResponse.json({ error: "Survey not found" }, { status: 404 })
     }
 
-    if (!survey.user.business) {
+    // Find business for survey owner
+    const { data: business, error: bizError } = await supabase
+      .from('businesses')
+      .select('id')
+      .eq('user_id', survey.user_id)
+      .single()
+
+    if (bizError || !business) {
       return NextResponse.json({ error: "Business not found" }, { status: 404 })
     }
 
-    let customer = null
+    let customerId: string | null = null
 
-    // Create or find customer if customer info provided
-    if (customerInfo?.email && survey.user.business) {
-      customer = await prisma.customer.upsert({
-        where: {
-          email: customerInfo.email,
-        },
-        update: {
-          name: customerInfo.name || customer?.name,
-          phone: customerInfo.phone || customer?.phone,
-          location: customerInfo.location || customer?.location,
-          age: customerInfo.age || customer?.age,
-          notes: customerInfo.notes || customer?.notes,
-          data: customerInfo,
-        },
-        create: {
-          email: customerInfo.email,
-          name: customerInfo.name,
-          phone: customerInfo.phone,
-          location: customerInfo.location,
-          age: customerInfo.age,
-          notes: customerInfo.notes,
-          data: customerInfo,
-          businessId: survey.user.business.id,
-        },
-      })
+    // Create or update customer if info provided
+    if (customerInfo?.email) {
+      // Try to find existing customer for this business by email
+      const { data: existingCustomer } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('business_id', business.id)
+        .eq('email', customerInfo.email)
+        .single()
+
+      if (existingCustomer?.id) {
+        customerId = existingCustomer.id
+        await supabase
+          .from('customers')
+          .update({
+            name: customerInfo.name ?? undefined,
+            phone: customerInfo.phone ?? undefined,
+            location: customerInfo.location ?? undefined,
+            age: customerInfo.age ?? undefined,
+            notes: customerInfo.notes ?? undefined,
+            email: customerInfo.email,
+            data: customerInfo,
+          })
+          .eq('id', existingCustomer.id)
+      } else {
+        const { data: createdCustomer } = await supabase
+          .from('customers')
+          .insert({
+            business_id: business.id,
+            email: customerInfo.email,
+            name: customerInfo.name ?? null,
+            phone: customerInfo.phone ?? null,
+            location: customerInfo.location ?? null,
+            age: customerInfo.age ?? null,
+            notes: customerInfo.notes ?? null,
+            data: customerInfo,
+          })
+          .select('id')
+          .single()
+        customerId = createdCustomer?.id ?? null
+      }
     }
 
     // Create survey response
-    const response = await prisma.surveyResponse.create({
-      data: {
+    const { data: response, error: respError } = await supabase
+      .from('survey_responses')
+      .insert({
         answers,
-        surveyId: params.id,
-        businessId: survey.user.business.id,
-        customerId: customer?.id || null,
-        submittedAt: new Date(),
-      },
-    })
+        survey_id: params.id,
+        business_id: business.id,
+        customer_id: customerId,
+        submitted_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single()
+
+    if (respError || !response) {
+      throw respError
+    }
 
     return NextResponse.json({ success: true, responseId: response.id })
   } catch (error) {

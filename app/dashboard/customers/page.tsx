@@ -17,10 +17,10 @@ interface Customer {
   email: string
   location?: string
   age?: number
-  createdAt: string
-  responses: Array<{
-    survey: { title: string }
-    submittedAt: string
+  createdAt?: string
+  responses?: Array<{
+    survey?: { title: string }
+    submittedAt?: string
   }>
 }
 
@@ -188,8 +188,8 @@ export default function CustomersPage() {
                   <TableCell>{customer.location || "—"}</TableCell>
                   <TableCell>{customer.age || "—"}</TableCell>
                   <TableCell>
-                    {customer.responses.length > 0
-                      ? new Date(customer.responses[0].submittedAt).toLocaleDateString()
+                    {customer.responses && customer.responses.length > 0
+                      ? new Date(customer.responses[0].submittedAt as string).toLocaleDateString()
                       : "Never"}
                   </TableCell>
                   <TableCell>

@@ -1,11 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { getAuthenticatedUser } from "@/lib/middleware"
+import { supabase } from "@/lib/supabase/client"
+import { getCurrentUser } from "@/lib/supabase/auth"
 import { customerSchema } from "@/lib/validations"
 
 export async function GET(request: NextRequest) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const user = await getCurrentUser(request)
     if (!user) {
       return NextResponse.json({ error: "Unauthorized 4" }, { status: 401 })
     }
@@ -13,33 +13,31 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get("search") || ""
 
-    const customers = await prisma.customer.findMany({
-      where: {
-        businessId: user.business.id,
-        OR: search
-          ? [
-              { name: { contains: search, mode: "insensitive" } },
-              { email: { contains: search, mode: "insensitive" } },
-              { location: { contains: search, mode: "insensitive" } },
-              { phone: { contains: search, mode: "insensitive" } },
-            ]
-          : undefined,
-      },
-      orderBy: { name: "asc" },
-      include: {
-        responses: {
-          include: {
-            survey: {
-              select: { title: true },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-          take: 1,
-        },
-      },
-    })
+    let query = supabase
+      .from('customers')
+      .select('id, name, email, location, age, created_at')
+      .eq('business_id', user.business.id)
+      .order('name', { ascending: true })
 
-    return NextResponse.json({ customers })
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%,location.ilike.%${search}%,phone.ilike.%${search}%`)
+    }
+
+    const { data: customers, error } = await query
+
+    if (error) throw error
+
+    const normalized = (customers || []).map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      location: c.location,
+      age: c.age,
+      createdAt: c.created_at,
+      responses: [],
+    }))
+
+    return NextResponse.json({ customers: normalized })
   } catch (error) {
     console.error("Get customers error:", error)
     return NextResponse.json({ error: "Failed to fetch customers" }, { status: 500 })
@@ -48,7 +46,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const user = await getCurrentUser(request)
     if (!user || !user.business.id) {
       return NextResponse.json({ error: "Unauthorized 5" }, { status: 401 })
     }
@@ -56,14 +54,28 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const validatedData = customerSchema.parse(body)
 
-    const customer = await prisma.customer.create({
-      data: {
+    const { data: customer, error } = await supabase
+      .from('customers')
+      .insert({
         ...validatedData,
-        businessId: user.business.id,
-      },
-    })
+        business_id: user.business.id,
+      })
+      .select('id, name, email, location, age, created_at')
+      .single()
 
-    return NextResponse.json({ customer })
+    if (error) throw error
+
+    const normalized = {
+      id: customer.id,
+      name: customer.name,
+      email: customer.email,
+      location: customer.location,
+      age: customer.age,
+      createdAt: customer.created_at,
+      responses: [],
+    }
+
+    return NextResponse.json({ customer: normalized })
   } catch (error) {
     console.error("Create customer error:", error)
     return NextResponse.json({ error: "Failed to create customer" }, { status: 500 })

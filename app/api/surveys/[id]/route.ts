@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getCurrentUser } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { getCurrentUser } from "@/lib/supabase/auth"
+import { supabase } from "@/lib/supabase/client"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -11,26 +11,27 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
     const { id } = await params
 
-    const survey = await prisma.survey.findFirst({
-      where: {
-        id: id,
-        userId: user.id,
-      },
-      include: {
-        responses: {
-          include: {
-            customer: true,
-          },
-          orderBy: { createdAt: "desc" },
-        },
-      },
-    })
+    const { data: survey, error } = await supabase
+      .from('surveys')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .single()
 
-    if (!survey) {
+    if (error || !survey) {
       return NextResponse.json({ error: "Survey not found" }, { status: 404 })
     }
 
-    return NextResponse.json({ survey })
+    const normalized = {
+      id: survey.id,
+      title: survey.title,
+      description: survey.description,
+      questions: survey.questions,
+      isActive: Boolean(survey.is_active),
+      createdAt: survey.created_at,
+    }
+
+    return NextResponse.json({ survey: normalized })
   } catch (error) {
     console.error("Get survey error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -50,27 +51,32 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: "Title and questions are required" }, { status: 400 })
     }
 
-    const survey = await prisma.survey.updateMany({
-      where: {
-        id: params.id,
-        userId: user.id,
-      },
-      data: {
+    const { data: survey, error } = await supabase
+      .from('surveys')
+      .update({
         title,
         description,
         questions,
-      },
-    })
+      })
+      .eq('id', params.id)
+      .eq('user_id', user.id)
+      .select()
+      .single()
 
-    if (survey.count === 0) {
+    if (error || !survey) {
       return NextResponse.json({ error: "Survey not found" }, { status: 404 })
     }
 
-    const updatedSurvey = await prisma.survey.findUnique({
-      where: { id: params.id },
-    })
+    const normalized = {
+      id: survey.id,
+      title: survey.title,
+      description: survey.description,
+      questions: survey.questions,
+      isActive: Boolean(survey.is_active),
+      createdAt: survey.created_at,
+    }
 
-    return NextResponse.json({ survey: updatedSurvey })
+    return NextResponse.json({ survey: normalized })
   } catch (error) {
     console.error("Update survey error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -84,14 +90,13 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
     }
 
-    const survey = await prisma.survey.deleteMany({
-      where: {
-        id: params.id,
-        userId: user.id,
-      },
-    })
+    const { error } = await supabase
+      .from('surveys')
+      .delete()
+      .eq('id', params.id)
+      .eq('user_id', user.id)
 
-    if (survey.count === 0) {
+    if (error) {
       return NextResponse.json({ error: "Survey not found" }, { status: 404 })
     }
 
