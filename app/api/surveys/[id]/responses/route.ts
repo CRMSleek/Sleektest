@@ -25,7 +25,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const { answers, customerInfo } = await request.json()
-
+    if (customerInfo?.phone && !customerInfo?.email) {
+      customerInfo.email = "N/A"
+    }
     if (!answers) {
       return NextResponse.json({ error: "Answers are required" }, { status: 400 })
     }
@@ -66,7 +68,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         .eq('business_id', business.id)
         .eq('email', customerInfo.email)
         .single()
-
       if (existingCustomer?.id) {
         customerId = existingCustomer.id
         await supabase
@@ -102,7 +103,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
     // Create survey response
 
-    
     const { data: response, error: respError } = await supabase
       .from('survey_responses')
       .insert({
@@ -111,8 +111,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         business_id: business.id,
         customer_id: customerId,
         submitted_at: new Date().toISOString(),
-        customer_email: customerInfo.email,
-        customer_name: customerInfo.name
+        customer_email: customerInfo?.email,
+        customer_name: customerInfo?.name
       })
       .select('id')
       .single()

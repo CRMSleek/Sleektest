@@ -207,7 +207,13 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
           <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-2">Thank You!</h2>
           <p className="text-muted-foreground mb-4">Your survey response has been submitted successfully.</p>
-          <Button onClick={() => window.close()}>Close</Button>
+          <Button onClick={() => {
+            if (window.opener) {
+              window.close()
+            } else {
+              window.location.href = "/"
+            }
+          }}>Close</Button>
         </CardContent>
       </Card>
     </div>
