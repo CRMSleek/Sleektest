@@ -24,17 +24,23 @@ interface Survey {
   questions: Question[]
 }
 
+interface Answer {
+  id: string
+  name: string
+  type: string
+  value: string
+}
+
 export default function PublicSurveyPage({ params }: { params: Promise<{ id: string }> }) {
   const [id, setId] = useState<string>("")
   const [survey, setSurvey] = useState<Survey | null>(null)
-  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [answers, setAnswers] = useState<Record<string, Answer>>({})
   const [customerInfo, setCustomerInfo] = useState({ name: "", email: "", phone: "" })
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState("")
 
-  // unwrap params
   useEffect(() => {
     const unwrapParams = async () => {
       const resolved = await params
@@ -43,7 +49,6 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
     unwrapParams()
   }, [params])
 
-  // fetch survey once id is set
   useEffect(() => {
     if (!id) return
 
@@ -53,13 +58,12 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
         if (response.ok) {
           const data = await response.json()
           setSurvey(data.survey)
-          
+
           // Track survey open
           try {
             await fetch(`/api/surveys/${id}/open`, { method: 'POST' })
           } catch (err) {
             console.error("Failed to track survey open:", err)
-            // Don't fail the survey load if tracking fails
           }
         } else {
           setError("Survey not found")
@@ -75,8 +79,11 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
     fetchSurvey()
   }, [id])
 
-  const handleAnswerChange = (questionId: string, value: string) => {
-    setAnswers(prev => ({ ...prev, [questionId]: value }))
+  const handleAnswerChange = (question: Question, value: string) => {
+    setAnswers(prev => ({
+      ...prev,
+      [question.id]: { id: question.id, name: question.question, type: question.type, value }
+    }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,7 +91,7 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
     if (!survey) return
 
     const missingAnswers = survey.questions
-      .filter(q => q.required && !answers[q.id]?.trim())
+      .filter(q => q.required && !answers[q.id]?.value?.trim())
       .map(q => q.question)
 
     if (missingAnswers.length > 0) {
@@ -115,11 +122,12 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
   }
 
   const renderQuestion = (question: Question) => {
+    const value = answers[question.id]?.value || ""
     const commonProps = {
       id: question.id,
-      value: answers[question.id] || "",
+      value,
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-        handleAnswerChange(question.id, e.target.value),
+        handleAnswerChange(question, e.target.value),
       required: question.required,
       className: "w-full",
     }
@@ -132,28 +140,16 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
       case "number":
         return <Input {...commonProps} type="number" placeholder="Enter a number" />
       case "textarea":
-        return (
-          <Textarea
-            {...commonProps}
-            placeholder="Enter your answer"
-            rows={4}
-            onChange={(e) => handleAnswerChange(question.id, e.target.value)}
-          />
-        )
+        return <Textarea {...commonProps} rows={4} placeholder="Enter your answer" />
       case "select":
         return (
-          <Select
-            value={answers[question.id] || ""}
-            onValueChange={(value) => handleAnswerChange(question.id, value)}
-          >
+          <Select value={value} onValueChange={(val) => handleAnswerChange(question, val)}>
             <SelectTrigger>
               <SelectValue placeholder="Select an option" />
             </SelectTrigger>
             <SelectContent>
-              {question.options?.map((option, index) => (
-                <SelectItem key={index} value={option}>
-                  {option}
-                </SelectItem>
+              {question.options?.map((opt, i) => (
+                <SelectItem key={i} value={opt}>{opt}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -161,20 +157,18 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
       case "satisfaction":
         return (
           <div className="space-y-3">
-            {question.satisfactionPrompt && (
-              <p className="text-sm text-muted-foreground">{question.satisfactionPrompt}</p>
-            )}
+            {question.satisfactionPrompt && <p className="text-sm text-muted-foreground">{question.satisfactionPrompt}</p>}
             <div className="flex gap-2">
-              {["1", "2", "3", "4", "5"].map((rating) => (
+              {["1","2","3","4","5"].map(rating => (
                 <Button
                   key={rating}
                   type="button"
-                  variant={answers[question.id] === rating ? "default" : "outline"}
+                  variant={value === rating ? "default" : "outline"}
                   size="sm"
-                  onClick={() => handleAnswerChange(question.id, rating)}
+                  onClick={() => handleAnswerChange(question, rating)}
                   className="flex flex-col items-center gap-1 h-auto py-2 px-3"
                 >
-                  <Star className={`h-4 w-4 ${answers[question.id] === rating ? "text-yellow-400" : "text-gray-400"}`} />
+                  <Star className={`h-4 w-4 ${value === rating ? "text-yellow-400" : "text-gray-400"}`} />
                   <span className="text-xs">{rating}</span>
                 </Button>
               ))}
@@ -227,18 +221,14 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
         <Card>
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">{survey.title}</CardTitle>
-            {survey.description && (
-              <p className="text-muted-foreground">{survey.description}</p>
-            )}
+            {survey.description && <p className="text-muted-foreground">{survey.description}</p>}
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-6">
               {survey.questions.map((question, index) => (
                 <div key={question.id} className="space-y-3">
                   <div className="flex items-start gap-2">
-                    <span className="text-sm font-medium text-muted-foreground">
-                      {index + 1}.
-                    </span>
+                    <span className="text-sm font-medium text-muted-foreground">{index + 1}.</span>
                     <div className="flex-1">
                       <label htmlFor={question.id} className="block text-sm font-medium mb-2">
                         {question.question}
@@ -257,7 +247,7 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
                     <label className="block text-sm font-medium mb-2">Name</label>
                     <Input
                       value={customerInfo.name}
-                      onChange={(e) => setCustomerInfo(prev => ({ ...prev, name: e.target.value }))}
+                      onChange={e => setCustomerInfo(prev => ({ ...prev, name: e.target.value }))}
                       placeholder="Your name"
                     />
                   </div>
@@ -266,7 +256,7 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
                     <Input
                       type="email"
                       value={customerInfo.email}
-                      onChange={(e) => setCustomerInfo(prev => ({ ...prev, email: e.target.value }))}
+                      onChange={e => setCustomerInfo(prev => ({ ...prev, email: e.target.value }))}
                       placeholder="your.email@example.com"
                     />
                   </div>
@@ -275,18 +265,13 @@ export default function PublicSurveyPage({ params }: { params: Promise<{ id: str
                   <label className="block text-sm font-medium mb-2">Phone</label>
                   <Input
                     value={customerInfo.phone}
-                    onChange={(e) => setCustomerInfo(prev => ({ ...prev, phone: e.target.value }))}
+                    onChange={e => setCustomerInfo(prev => ({ ...prev, phone: e.target.value }))}
                     placeholder="Your phone number"
                   />
                 </div>
               </div>
 
-              <Button
-                type="submit"
-                disabled={submitting}
-                className="w-full"
-                size="lg"
-              >
+              <Button type="submit" disabled={submitting} className="w-full" size="lg">
                 {submitting ? "Submitting..." : "Submit Survey"}
               </Button>
             </form>

@@ -47,9 +47,13 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 
     const { title, description, questions } = await request.json()
 
+    console.log("RESPONSES", title, description, questions)
+
     if (!title || !questions || !Array.isArray(questions)) {
       return NextResponse.json({ error: "Title and questions are required" }, { status: 400 })
     }
+
+    const { id } = await params
 
     const { data: survey, error } = await supabase
       .from('surveys')
@@ -58,7 +62,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
         description,
         questions,
       })
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
       .select()
       .single()
@@ -75,7 +79,6 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       isActive: Boolean(survey.is_active),
       createdAt: survey.created_at,
     }
-
     return NextResponse.json({ survey: normalized })
   } catch (error) {
     console.error("Update survey error:", error)
@@ -90,10 +93,12 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
     }
 
+    const { id } = await params
+
     const { error } = await supabase
       .from('surveys')
       .delete()
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
 
     if (error) {

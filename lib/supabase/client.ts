@@ -158,6 +158,8 @@ export interface Database {
           survey_id: string
           business_id: string
           customer_id: string | null
+          customer_email: string | null
+          customer_name: string | null
         }
         Insert: {
           id?: string
@@ -167,6 +169,8 @@ export interface Database {
           survey_id: string
           business_id: string
           customer_id?: string | null
+          customer_email?: string | null
+          customer_name?: string | null
         }
         Update: {
           id?: string
@@ -176,6 +180,8 @@ export interface Database {
           survey_id?: string
           business_id?: string
           customer_id?: string | null
+          customer_email?: string | null
+          customer_name?: string | null
         }
       }
     }

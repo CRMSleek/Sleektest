@@ -35,22 +35,29 @@ export default function RegisterPage() {
     e.preventDefault()
     setLoading(true)
     setError("")
-
+  
     if (formData.password.length < 6) {
       setError("Password must be at least 6 characters long")
       setLoading(false)
       return
     }
-
+  
     try {
+      const payload = {
+        ...formData,
+        businessName: formData.businessName || formData.name + "'s Business",
+      }
+  
+      console.log(payload)
+  
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       })
-
+  
       if (response.ok) {
         router.push("/dashboard")
         router.refresh()

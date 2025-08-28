@@ -27,9 +27,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {/* Header */}
-      <header className="bg-gray-800 border-b border-gray-700">
+      <header className="bg-gray-800 border-b border-gray-700 flex-shrink-0">
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
@@ -49,9 +49,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className="w-64 bg-gray-800 border-r border-gray-700 min-h-screen">
+        <aside className="w-64 bg-gray-800 border-r border-gray-700 flex-shrink-0">
           <nav className="p-6 space-y-2">
             <Link
               href="/dashboard"
@@ -85,7 +85,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 bg-gray-900 text-white">{children}</main>
+        <main className="flex-1 overflow-auto min-h-0 bg-gray-900">{children}</main>
       </div>
     </div>
   )

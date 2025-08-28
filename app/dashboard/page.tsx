@@ -96,7 +96,7 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {[{
-          title: "Total Surveys",
+          title: "Total Active Surveys",
           value: stats.totalSurveys,
           icon: <FileText className="h-4 w-4 text-blue-400" />,
           desc: "Active surveys",

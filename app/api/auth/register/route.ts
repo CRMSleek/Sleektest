@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase/client"
 export async function POST(request: NextRequest) {
   try {
     const { email, password, name, businessName } = await request.json()
+    console.log(email, password, name, businessName)
 
     if (!email || !password) {
       return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
 
     // Create business if businessName is provided
     let business = null
+    console.log(businessName)
     if (businessName) {
       const { data: newBusiness } = await supabase
         .from('businesses')

@@ -4,15 +4,18 @@ import { supabase } from "@/lib/supabase/client"
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     // Fetch responses for this survey (owner-facing; auth already enforced by middleware)
+
+    const { id } = await params
     const { data: responses, error } = await supabase
       .from('survey_responses')
-      .select('id, submitted_at, answers')
-      .eq('survey_id', params.id)
+      .select('id, submitted_at, answers, customer_email, customer_name')
+      .eq('survey_id', id)
       .order('submitted_at', { ascending: false })
 
-    if (error) throw error
 
-    return NextResponse.json({ responses: responses || [] })
+    if (error) throw error
+    const resp = { response: responses }
+    return NextResponse.json(resp, { status: 200 })
   } catch (error) {
     console.error('List survey responses error:', error)
     return NextResponse.json({ error: 'Failed to load responses' }, { status: 500 })
@@ -27,11 +30,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: "Answers are required" }, { status: 400 })
     }
 
+    const { id } = await params
+
     // Check if survey exists and is active
     const { data: survey, error: surveyError } = await supabase
       .from('surveys')
       .select('id, user_id, is_active')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('is_active', true)
       .single()
 
@@ -96,14 +101,18 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
 
     // Create survey response
+
+    
     const { data: response, error: respError } = await supabase
       .from('survey_responses')
       .insert({
         answers,
-        survey_id: params.id,
+        survey_id: id,
         business_id: business.id,
         customer_id: customerId,
         submitted_at: new Date().toISOString(),
+        customer_email: customerInfo.email,
+        customer_name: customerInfo.name
       })
       .select('id')
       .single()

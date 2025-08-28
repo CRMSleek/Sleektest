@@ -22,14 +22,28 @@ export async function POST(request: NextRequest) {
 
     const [customersResult, surveysResult, responsesResult] = await Promise.all([
       supabase.from('customers').select('age, location, data, created_at').eq('business_id', businessId),
-      supabase.from('surveys').select('title, description, is_active, created_at').eq('user_id', user.id),
-      supabase.from('survey_responses').select('answers, submitted_at').eq('business_id', businessId).limit(100),
+      supabase.from('surveys').select('title, description, is_active, created_at, id').eq('user_id', user.id),
+      supabase.from('survey_responses').select('answers, submitted_at, survey_id').eq('business_id', businessId).limit(100),
     ])
 
-    const customers = customersResult.data || []
-    const surveys = surveysResult.data || []
-    const responses = responsesResult.data || []
+    
 
+    const customers = customersResult.data || []
+    let surveys = surveysResult.data || []
+    let responses = responsesResult.data || []
+
+    // O(n) right now, will need to change in future
+    for (let i = 0; i < surveys.length; i++) {
+      surveys[i].response_num = 0
+    }
+
+    for (let i = 0; i < responses.length; i++) {
+      const surveyId = responses[i].survey_id
+      const survey = surveys.find(s => s.id === surveyId)
+      if (survey) {
+        survey.response_num += 1
+      }
+    }
     if (customers.length === 0 && surveys.length === 0 && responses.length === 0) {
       return NextResponse.json({
         insights: [
@@ -42,6 +56,7 @@ export async function POST(request: NextRequest) {
         ],
       })
     }
+    console.log(surveys)
 
     // Prepare summary for AI
     const dataSummary = {
@@ -50,13 +65,15 @@ export async function POST(request: NextRequest) {
       totalResponses: responses.length,
       customerAges: customers.filter(c => c.age !== null).map(c => c.age),
       customerLocations: customers.filter(c => c.location).map(c => c.location),
-      recentFeedback: responses.slice(0, 20).map(r => Object.values(r.answers as Record<string, string>).join(" ")),
+      recentFeedback: responses.slice(0, 20).map(r => Object.values(r.answers as Record<string, { value: string }>).map(a => a.value).join(" ")),
       surveyPerformance: surveys.map(s => ({
         title: s.title,
-        responses: 0, // We'll need to calculate this separately if needed
+        responses: s.response_num,
         isActive: s.is_active,
       })),
     }
+
+    console.log(dataSummary)
 
     // Generate AI insights
     const response = await client.responses.create({

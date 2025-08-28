@@ -10,6 +10,14 @@ export async function POST(request: NextRequest) {
     }
 
     const user = await findUserByEmail(email)
+    
+    if (!user) {
+      return NextResponse.json({ error: "User does not exist, please sign up"}, { status: 401 })
+    }
+
+    if (!user.password) {
+      return NextResponse.json({ error: "This user was registered in using OAuth, please sign in using Google"}, { status: 401 })
+    }
 
     if (!user || !(await verifyPassword(password, user.password))) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 })
