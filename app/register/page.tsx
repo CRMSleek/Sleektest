@@ -47,9 +47,7 @@ export default function RegisterPage() {
         ...formData,
         businessName: formData.businessName || formData.name + "'s Business",
       }
-  
-      console.log(payload)
-  
+    
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: {

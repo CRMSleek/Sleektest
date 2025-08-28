@@ -52,8 +52,6 @@ export function AnalyticsInsights() {
 
       const data = await response.json()
       console.log("Insights data:", data)
-
-      console.log(data.insights)
       setInsights(data.insights)
     } catch (error) {
       console.error("Failed to generate insights:", error)

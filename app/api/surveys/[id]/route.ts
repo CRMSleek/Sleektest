@@ -47,8 +47,6 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 
     const { title, description, questions } = await request.json()
 
-    console.log("RESPONSES", title, description, questions)
-
     if (!title || !questions || !Array.isArray(questions)) {
       return NextResponse.json({ error: "Title and questions are required" }, { status: 400 })
     }

@@ -56,7 +56,6 @@ export async function POST(request: NextRequest) {
         ],
       })
     }
-    console.log(surveys)
 
     // Prepare summary for AI
     const dataSummary = {
@@ -73,7 +72,6 @@ export async function POST(request: NextRequest) {
       })),
     }
 
-    console.log(dataSummary)
 
     // Generate AI insights
     const response = await client.responses.create({
