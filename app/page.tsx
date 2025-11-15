@@ -7,20 +7,35 @@ import { CheckCircle, Users, BarChart3 } from "lucide-react"
 import { motion, useScroll, useTransform } from "framer-motion"
 import { useState, useEffect } from "react"
 import logo from '../public/logo.png'
+import PrivacyPolicyPage from "@/components/ui/privacy-policy"
 
 export default function HomePage() {
   const [isScrolled, setIsScrolled] = useState(false)
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false)
   const { scrollY } = useScroll()
   const navbarOpacity = useTransform(scrollY, [0, 100], [0, 1])
   const navbarY = useTransform(scrollY, [0, 100], [-100, 0])
+
+  const checkHash = () => {
+    if (window.location.hash === "#privacy") {
+      setShowPrivacyPolicy(true)
+    }
+  }
+
 
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 100)
     }
-
+  
+    checkHash()
+    window.addEventListener('hashchange', checkHash)
     window.addEventListener('scroll', handleScroll)
-    return () => window.removeEventListener('scroll', handleScroll)
+  
+    return () => {
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('hashchange', checkHash)
+    }
   }, [])
 
   const heroVariants = {
@@ -47,7 +62,7 @@ export default function HomePage() {
 
   return (
     <motion.div
-      className="min-h-screen bg-gray-900 text-white"
+      className="min-h-screen bg-gray-900 text-white relative"
       initial="hidden"
       animate="visible"
       exit="exit"
@@ -204,13 +219,13 @@ export default function HomePage() {
               <span className="font-semibold">SleekCRM</span>
             </div>
             <div className="flex space-x-6 text-sm text-gray-400">
-              <Link href="/privacy" className="hover:text-white transition-colors">
+              <a href='#privacy' onClick={() => setShowPrivacyPolicy(true)} className="hover:text-white transition-colors">
                 Privacy Policy
-              </Link>
-              <Link href="/terms" className="hover:text-white transition-colors">
+              </a>
+              <Link href="/" className="hover:text-white transition-colors">
                 Terms of Service
               </Link>
-              <Link href="/contact" className="hover:text-white transition-colors">
+              <Link href="/" className="hover:text-white transition-colors">
                 Contact
               </Link>
             </div>
@@ -220,6 +235,7 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+      {showPrivacyPolicy && <PrivacyPolicyPage showPrivacyPolicy={showPrivacyPolicy} setShowPrivacyPolicy={setShowPrivacyPolicy} />}
     </motion.div>
   )
 }

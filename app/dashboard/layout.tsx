@@ -68,6 +68,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span>Surveys</span>
             </Link>
             <Link
+              href="/dashboard/email"
+              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-gray-700 transition-colors text-white"
+            >
+              <Mail className="h-5 w-5" />
+              <span>Email</span>
+            </Link>
+            <Link
               href="/dashboard/customers"
               className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-gray-700 transition-colors text-white"
             >

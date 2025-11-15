@@ -1,5 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { verifyPassword, generateToken, findUserByEmail } from "@/lib/supabase/auth"
+import nodemailer from "nodemailer"
+
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,14 +27,23 @@ export async function POST(request: NextRequest) {
 
     const token = await generateToken(user.id)
 
+    const transporter = nodemailer.createTransport({
+      auth: {
+        user: user.email,
+        pass: user.password,
+      },
+    });
+
     const response = NextResponse.json({
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
         business: user.business,
-      },
+      }
     })
+
+    
 
     response.cookies.set("auth-token", token, {
       httpOnly: true,
@@ -40,6 +51,7 @@ export async function POST(request: NextRequest) {
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7, // 7 days
     })
+
 
     return response
   } catch (error) {

@@ -6,39 +6,255 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { MoreHorizontal, Plus, Search } from "lucide-react"
+import EmailSend from "@/components/ui/email-send"
+import EmailView from "@/components/ui/email-view"
+import { MoreHorizontal, Plus, Search, ChevronLeft, ChevronRight } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { motion } from "framer-motion"
+import { motion, easeOut } from "framer-motion"
 
 export default function EmailPage() {
+  const [OAuth, setOAuth] = useState(true)
+  const [emails, setEmails] = useState<any[]>([])
+  const [allEmails, setAllEmails] = useState<any[]>([]) // Store all emails for search filtering
+  const [search, setSearch] = useState("")
+  const [showEmailComponent, setShowEmailComponent] = useState(false)
+  const [showEmailViewComponent, setShowEmailViewComponent] = useState<any>(null)
+  const [emailSendMode, setEmailSendMode] = useState<'compose' | 'reply' | 'forward'>('compose')
+  const [originalEmail, setOriginalEmail] = useState<any>(null)
+  const [placeholderText, setPlaceholderText] = useState("No emails found.")
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null)
+  const [currentPageToken, setCurrentPageToken] = useState<string | null>(null)
+  const [pageHistory, setPageHistory] = useState<string[]>([]) // Stack for previous pages
+  const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
+
   const fadeUp = {
     hidden: { opacity: 0, y: 30 },
-    visible: ({ opacity: 1, y: 0 }),
+    visible: { opacity: 1, y: 0, transition: { duration: 1, ease: easeOut, when: "beforeChildren", staggerChildren: 0.15 } },
   }
   const fade = {
-    hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { duration: 0.7 } },
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.8, ease: easeOut } },
   }
 
+  const getOauth = async () => {
+    try {
+      const response = await fetch("/api/email")
+      const data = await response.json()
+      console.log(data.OAuth)
+      if (response.ok) setOAuth(data.OAuth)
+    } catch (err) {
+      console.error("Fetch OAuth error:", err)
+    }
+  }
+
+  const fetchEmails = async (pageToken?: string | null, append: boolean = false) => {
+    setIsLoading(true)
+    try {
+      const response = await fetch("/api/email", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          pageToken: pageToken || undefined,
+          maxResults: 10
+        }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        const newEmails = data.emails || []
+        if (append) {
+          setAllEmails(prev => [...prev, ...newEmails])
+          setEmails(prev => [...prev, ...newEmails])
+        } else {
+          setAllEmails(newEmails)
+          setEmails(newEmails)
+        }
+        setNextPageToken(data.nextPageToken || null)
+        setCurrentPageToken(pageToken || null)
+        console.log("Fetched emails:", newEmails.length, "Next page token:", data.nextPageToken)
+      } else {
+        console.log("Error fetching emails:", data)
+        setPlaceholderText("Please sign into SleekCRM using OAuth to use the email feature") 
+      }
+    } catch (err) {
+      console.error("Failed to fetch emails:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const loadNextPage = () => {
+    if (nextPageToken && !isLoading) {
+      fetchEmails(nextPageToken, true)
+    }
+  }
+
+  const loadPreviousPage = () => {
+    // Gmail API doesn't support backwards pagination easily
+    // So we'll reset to the first page
+    if (!isLoading) {
+      setAllEmails([])
+      setEmails([])
+      setNextPageToken(null)
+      setCurrentPageToken(null)
+      setPageHistory([])
+      fetchEmails(null, false)
+    }
+  }
+
+  useEffect(() => {
+    getOauth()
+    fetchEmails()
+  }, [])
+
+  // Filter emails based on search query
+  useEffect(() => {
+    if (!search.trim()) {
+      // If search is empty, show current page emails
+      setEmails(allEmails)
+    } else {
+      // Filter emails based on search query (search in sender, subject, and content)
+      const searchLower = search.toLowerCase()
+      const filtered = allEmails.filter((email) => {
+        const fromMatch = email.from?.toLowerCase().includes(searchLower)
+        const subjectMatch = email.subject?.toLowerCase().includes(searchLower)
+        const contentMatch = email.content?.toLowerCase().includes(searchLower) || 
+                           email.html?.toLowerCase().includes(searchLower)
+        return fromMatch || subjectMatch || contentMatch
+      })
+      setEmails(filtered)
+    }
+  }, [search, allEmails])
+
   return (
-    <div
-      className="space-y-6 p-6"
-      initial="hidden"
-      animate="visible"
-      variants={fadeUp}>
-      <motion.div 
-      className="flex items-center justify-between"
-      initial="hidden"
-      animate="visible"
-      variants={fade}>
+    <motion.div className="space-y-6 p-6" initial="hidden" animate="visible" variants={fadeUp}>
+      <motion.div className="flex items-center justify-between" variants={fade}>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Email</h1>
-          <h3 className="text-xl tracking-tight">This feature will be available in the next release!</h3>
           <p className="text-muted-foreground">Send, receive, and track emails</p>
         </div>
+        <Button className="gap-2" variant="default" disabled={!OAuth} onClick={() => {
+          setEmailSendMode('compose')
+          setOriginalEmail(null)
+          setShowEmailComponent(true)
+        }}>
+          <Plus className="w-4 h-4" /> Compose
+        </Button>
+        {showEmailComponent && (
+          <EmailSend 
+            isOpen={showEmailComponent} 
+            onClose={() => {
+              setShowEmailComponent(false)
+              setOriginalEmail(null)
+              setEmailSendMode('compose')
+            }}
+            mode={emailSendMode}
+            originalEmail={originalEmail}
+          />
+        )}
+        {showEmailViewComponent && (
+          <EmailView 
+            isOpen={!!showEmailViewComponent} 
+            onClose={() => setShowEmailViewComponent(null)} 
+            emailId={showEmailViewComponent}
+            onReply={(email) => {
+              setEmailSendMode('reply')
+              setOriginalEmail(email)
+              setShowEmailComponent(true)
+            }}
+            onForward={(email) => {
+              setEmailSendMode('forward')
+              setOriginalEmail(email)
+              setShowEmailComponent(true)
+            }}
+          />
+        )}
       </motion.div>
-    </div>
+
+      <motion.div className="flex items-center gap-4" variants={fade}>
+        <div className="relative w-full max-w-md">
+          <Input placeholder="Search emails..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        </div>
+      </motion.div>
+
+      <motion.div className="overflow-x-auto rounded-lg border bg-background shadow-sm" variants={fade}>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Sender</TableHead>
+              <TableHead>Subject</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  Loading emails...
+                </TableCell>
+              </TableRow>
+            ) : emails.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  {search ? "No emails match your search." : placeholderText}
+                </TableCell>
+              </TableRow>
+            ) : (
+              emails.map((email) => (
+                <TableRow key={email.id}>
+                  <TableCell>{email.from}</TableCell>
+                  <TableCell>{email.subject}</TableCell>
+                  <TableCell>{email.date}</TableCell>
+                  <TableCell className="text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon">
+                          <MoreHorizontal className="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setShowEmailViewComponent(email)}>
+                          View
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => toast({ title: "Delete Email", description: email.subject })}>
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+        
+        {!search && OAuth && (
+          <div className="flex items-center justify-between p-4 border-t">
+            <Button
+              variant="outline"
+              onClick={loadPreviousPage}
+              disabled={isLoading || allEmails.length <= 10}
+              className="flex items-center gap-2"
+            >
+              Reset to First Page
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              {allEmails.length} email{allEmails.length !== 1 ? 's' : ''} loaded
+              {nextPageToken && ' • More available'}
+            </span>
+            <Button
+              variant="outline"
+              onClick={loadNextPage}
+              disabled={isLoading || !nextPageToken}
+              className="flex items-center gap-2"
+            >
+              Load More
+            </Button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   )
 }
