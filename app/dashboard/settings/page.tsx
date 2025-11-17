@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { useAuth } from "@/components/auth-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +11,17 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
 import { motion } from "framer-motion"
 
@@ -23,10 +35,12 @@ export default function SettingsPage() {
     visible: { opacity: 1, transition: { duration: 0.7 } },
   }
   const user = useAuth()
+  const router = useRouter()
   const { toast } = useToast()
   const [taskDone, setTaskDone] = useState("")
   const [appError, setAppError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
@@ -191,6 +205,41 @@ export default function SettingsPage() {
       return () => clearTimeout(timer);
     }
   }, [appError]);
+
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true)
+    try {
+      const response = await fetch("/api/auth/delete-account", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to delete account")
+      }
+
+      // Logout and redirect
+      await user.logout()
+      
+      toast({
+        title: "Account deleted",
+        description: "Your account and all associated data have been permanently deleted.",
+      })
+
+      router.push("/login")
+    } catch (error: any) {
+      console.error("Error deleting account:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete account. Please try again.",
+        variant: "destructive",
+      })
+      setIsDeleting(false)
+    }
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -401,21 +450,52 @@ export default function SettingsPage() {
             </Card>
           </motion.div>
           <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.24, duration: 0.6 }}>
-            {/*<Card>
+            <Card className="border-destructive">
               <CardHeader>
-                <CardTitle>Two-Factor Authentication</CardTitle>
-                <CardDescription>Add an extra layer of security to your account</CardDescription>
+                <CardTitle className="text-destructive">Delete Account</CardTitle>
+                <CardDescription>
+                  Permanently delete your account and all associated data. This action cannot be undone.
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">Two-factor authentication</p>
-                    <p className="text-sm text-muted-foreground">Secure your account with 2FA</p>
-                  </div>
-                  <Button variant="outline">Enable 2FA</Button>
-                </div>*
+                <p className="text-sm text-muted-foreground mb-4">
+                  Once you delete your account, all of your data including surveys, customers, saved emails, and business information will be permanently removed from our systems.
+                </p>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" disabled={isDeleting}>
+                      Delete Account
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This action cannot be undone. This will permanently delete your account and remove all of your data including:
+                        <ul className="list-disc list-inside mt-2 space-y-1">
+                          <li>Your user account</li>
+                          <li>All surveys you created</li>
+                          <li>All customer data</li>
+                          <li>All saved emails</li>
+                          <li>Your business information</li>
+                          <li>All survey responses</li>
+                        </ul>
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={handleDeleteAccount}
+                        disabled={isDeleting}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {isDeleting ? "Deleting..." : "Yes, delete my account"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </CardContent>
-            </Card>*/}
+            </Card>
           </motion.div>
         </TabsContent>
 

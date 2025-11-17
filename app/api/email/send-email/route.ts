@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   
   const currentUser = await getCurrentUser(request as any)
   
-  const hasOAuth = !currentUser.password
+  const hasOAuth = currentUser.google_id
   if (!hasOAuth && (!currentUser || !currentUser.password)) {
     return NextResponse.json({ error: "Unauthorized - Please configure email or use OAuth" }, { status: 401 });
   }

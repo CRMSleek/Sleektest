@@ -76,9 +76,6 @@ export default function EmailPage() {
         setNextPageToken(data.nextPageToken || null)
         setCurrentPageToken(pageToken || null)
         console.log("Fetched emails:", newEmails.length, "Next page token:", data.nextPageToken)
-      } else {
-        console.log("Error fetching emails:", data)
-        setPlaceholderText("Please sign into SleekCRM using OAuth to use the email feature") 
       }
     } catch (err) {
       console.error("Failed to fetch emails:", err)
@@ -315,6 +312,14 @@ export default function EmailPage() {
     fetchEmails()
     fetchSavedEmailIds()
   }, [])
+
+  useEffect(() => {
+    if (!OAuth) {
+      setPlaceholderText("Please sign into SleekCRM using OAuth to use the email feature")
+    } else {
+      setPlaceholderText("No emails found.")
+    }
+  }, [OAuth])
 
   // Filter emails based on search query
   useEffect(() => {

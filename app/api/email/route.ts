@@ -36,7 +36,7 @@ function getText(payload: any): string {
 export async function POST(request: NextRequest) {
     try {
         const user = await getCurrentUser(request)
-        if (!(user.password === null)) {
+        if (!user.google_id) {
             return NextResponse.json({ message: "This account is not connected to gmail" }, { status: 404 })
         }
 
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
     try {
         const user = await getCurrentUser(request)
-        return NextResponse.json({ OAuth: (user?.password === null) }, { status: 200 })
+        return NextResponse.json({ OAuth: (user?.google_id !== null) }, { status: 200 })
     } catch (e) {
         return NextResponse.json({ error: "Failed to fetch OAuth status" }, { status: 500 })
     }

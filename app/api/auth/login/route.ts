@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User does not exist, please sign up"}, { status: 401 })
     }
 
-    if (!user.password) {
+    if (user.google_id) {
       return NextResponse.json({ error: "This user was registered in using OAuth, please sign in using Google"}, { status: 401 })
     }
 
