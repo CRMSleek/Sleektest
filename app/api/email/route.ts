@@ -20,6 +20,19 @@ function getHTML(payload: any): string {
   return ''
 }
 
+function getText(payload: any): string {
+  if (!payload) return ''
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    return decodeBase64(payload.body.data)
+  } else if (payload.parts) {
+    for (const part of payload.parts) {
+      const text = getText(part)
+      if (text) return text
+    }
+  }
+  return ''
+}
+
 export async function POST(request: NextRequest) {
     try {
         const user = await getCurrentUser(request)
@@ -65,6 +78,7 @@ export async function POST(request: NextRequest) {
                     metadataHeaders: ["From", "Subject", "Date"],
                 })
                 const htmlContent = getHTML(m.data.payload)
+                const textContent = getText(m.data.payload)
                 const headers = m.data.payload?.headers || []
                 const getHeader = (name: string) =>
                 headers.find((h: any) => h.name?.toLowerCase() === name.toLowerCase())?.value || ""
@@ -74,14 +88,23 @@ export async function POST(request: NextRequest) {
                 const fromEmail = fromEmailMatch ? fromEmailMatch[1] : fromHeader
                 const fromName = fromHeader.includes('<') ? fromHeader.substring(0, fromHeader.indexOf('<')).trim() : ''
                 
+                const dateHeader = getHeader("Date")
+                const dateFormatted = dateHeader ? (dateHeader.includes("202") ? dateHeader.substring(0, dateHeader.indexOf("202") + 4) : dateHeader) : ""
+                
                 return {
                     id: msg.id,
                     threadId: m.data.threadId,
                     from: fromName || fromEmail,
                     fromEmail: fromEmail,
+                    fromName: fromName,
                     subject: getHeader("Subject"),
-                    date: getHeader("Date").substring(0, getHeader("Date").indexOf("202") + 4),
-                    content: htmlContent,
+                    date: dateFormatted,
+                    dateFull: dateHeader,
+                    to: getHeader("To"),
+                    cc: getHeader("Cc"),
+                    bcc: getHeader("Bcc"),
+                    content: htmlContent || textContent,
+                    contentText: textContent,
                     html: htmlContent,
                 }
             })

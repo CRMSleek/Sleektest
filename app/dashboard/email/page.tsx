@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import EmailSend from "@/components/ui/email-send"
@@ -26,6 +27,9 @@ export default function EmailPage() {
   const [currentPageToken, setCurrentPageToken] = useState<string | null>(null)
   const [pageHistory, setPageHistory] = useState<string[]>([]) // Stack for previous pages
   const [isLoading, setIsLoading] = useState(false)
+  const [savedEmailIds, setSavedEmailIds] = useState<Set<string>>(new Set())
+  const [checkedEmails, setCheckedEmails] = useState<Set<string>>(new Set())
+  const [isSaving, setIsSaving] = useState(false)
   const { toast } = useToast()
 
   const fadeUp = {
@@ -102,9 +106,214 @@ export default function EmailPage() {
     }
   }
 
+  // Fetch saved email IDs on component mount
+  const fetchSavedEmailIds = async () => {
+    try {
+      const response = await fetch("/api/email/saved")
+      if (response.ok) {
+        const data = await response.json()
+        const savedIds = new Set(data.savedEmailIds || [])
+        setSavedEmailIds(savedIds)
+        setCheckedEmails(savedIds) // Initialize checked emails with saved ones
+      }
+    } catch (err) {
+      console.error("Failed to fetch saved email IDs:", err)
+    }
+  }
+
+  // Save/delete emails when checkboxes change
+  const handleEmailToggle = async (emailId: string, email: any, isChecked: boolean) => {
+    const newChecked = new Set(checkedEmails)
+    
+    if (isChecked) {
+      newChecked.add(emailId)
+    } else {
+      newChecked.delete(emailId)
+    }
+    
+    setCheckedEmails(newChecked)
+    setIsSaving(true)
+
+    try {
+      const emailsToSave: any[] = []
+      const emailIdsToDelete: string[] = []
+
+      // Determine what needs to be saved or deleted
+      if (isChecked) {
+        // Email is being checked - save it
+        emailsToSave.push(email)
+      } else {
+        // Email is being unchecked - delete it if it was previously saved
+        if (savedEmailIds.has(emailId)) {
+          emailIdsToDelete.push(emailId)
+        }
+      }
+
+      const response = await fetch("/api/email/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emailsToSave: emailsToSave.length > 0 ? emailsToSave : undefined,
+          emailIdsToDelete: emailIdsToDelete.length > 0 ? emailIdsToDelete : undefined,
+        }),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        
+        // Update saved email IDs set
+        const updatedSavedIds = new Set(savedEmailIds)
+        data.saved?.forEach((id: string) => updatedSavedIds.add(id))
+        data.deleted?.forEach((id: string) => updatedSavedIds.delete(id))
+        setSavedEmailIds(updatedSavedIds)
+
+        if (isChecked) {
+          toast({
+            title: "Email saved",
+            description: "Email has been saved to the database.",
+          })
+        } else {
+          toast({
+            title: "Email removed",
+            description: "Email has been removed from the database.",
+          })
+        }
+      } else {
+        // Revert checkbox state on error
+        setCheckedEmails(checkedEmails)
+        toast({
+          title: "Error",
+          description: "Failed to save/delete email. Please try again.",
+          variant: "destructive",
+        })
+      }
+    } catch (err) {
+      console.error("Failed to save/delete email:", err)
+      // Revert checkbox state on error
+      setCheckedEmails(checkedEmails)
+      toast({
+        title: "Error",
+        description: "Failed to save/delete email. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Sync checked emails when emails are loaded
+  useEffect(() => {
+    if (allEmails.length > 0 && savedEmailIds.size > 0) {
+      const newChecked = new Set<string>()
+      allEmails.forEach((email) => {
+        if (savedEmailIds.has(email.id)) {
+          newChecked.add(email.id)
+        }
+      })
+      setCheckedEmails(newChecked)
+    } else if (allEmails.length > 0 && savedEmailIds.size === 0) {
+      // Clear checked emails if no saved emails
+      setCheckedEmails(new Set())
+    }
+  }, [allEmails, savedEmailIds])
+
+  // Batch save/delete for select all
+  const handleSelectAll = async (checked: boolean) => {
+    if (isSaving) return
+
+    const visibleEmailIds = new Set(emails.map(e => e.id))
+    const emailsToSave: any[] = []
+    const emailIdsToDelete: string[] = []
+
+    if (checked) {
+      // Check all - save emails that aren't already saved
+      emails.forEach((email) => {
+        if (!savedEmailIds.has(email.id)) {
+          emailsToSave.push(email)
+        }
+      })
+    } else {
+      // Uncheck all - delete emails that are saved
+      emails.forEach((email) => {
+        if (savedEmailIds.has(email.id)) {
+          emailIdsToDelete.push(email.id)
+        }
+      })
+    }
+
+    if (emailsToSave.length === 0 && emailIdsToDelete.length === 0) {
+      // Just update UI state if nothing to save/delete
+      const newChecked = new Set(checkedEmails)
+      if (checked) {
+        visibleEmailIds.forEach(id => newChecked.add(id))
+      } else {
+        visibleEmailIds.forEach(id => newChecked.delete(id))
+      }
+      setCheckedEmails(newChecked)
+      return
+    }
+
+    setIsSaving(true)
+    
+    // Optimistically update UI
+    const newChecked = new Set(checkedEmails)
+    if (checked) {
+      visibleEmailIds.forEach(id => newChecked.add(id))
+    } else {
+      visibleEmailIds.forEach(id => newChecked.delete(id))
+    }
+    setCheckedEmails(newChecked)
+
+    try {
+      const response = await fetch("/api/email/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emailsToSave: emailsToSave.length > 0 ? emailsToSave : undefined,
+          emailIdsToDelete: emailIdsToDelete.length > 0 ? emailIdsToDelete : undefined,
+        }),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        
+        // Update saved email IDs set
+        const updatedSavedIds = new Set(savedEmailIds)
+        data.saved?.forEach((id: string) => updatedSavedIds.add(id))
+        data.deleted?.forEach((id: string) => updatedSavedIds.delete(id))
+        setSavedEmailIds(updatedSavedIds)
+
+        toast({
+          title: checked ? "Emails saved" : "Emails removed",
+          description: `${checked ? emailsToSave.length : emailIdsToDelete.length} email(s) ${checked ? 'saved' : 'removed'} from database.`,
+        })
+      } else {
+        // Revert on error
+        setCheckedEmails(checkedEmails)
+        toast({
+          title: "Error",
+          description: "Failed to save/delete emails. Please try again.",
+          variant: "destructive",
+        })
+      }
+    } catch (err) {
+      console.error("Failed to save/delete emails:", err)
+      // Revert on error
+      setCheckedEmails(checkedEmails)
+      toast({
+        title: "Error",
+        description: "Failed to save/delete emails. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   useEffect(() => {
     getOauth()
     fetchEmails()
+    fetchSavedEmailIds()
   }, [])
 
   // Filter emails based on search query
@@ -182,6 +391,8 @@ export default function EmailPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-12">
+              </TableHead>
               <TableHead>Sender</TableHead>
               <TableHead>Subject</TableHead>
               <TableHead>Date</TableHead>
@@ -191,19 +402,28 @@ export default function EmailPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                <TableCell colSpan={5} className="text-center text-muted-foreground">
                   Loading emails...
                 </TableCell>
               </TableRow>
             ) : emails.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                <TableCell colSpan={5} className="text-center text-muted-foreground">
                   {search ? "No emails match your search." : placeholderText}
                 </TableCell>
               </TableRow>
             ) : (
               emails.map((email) => (
                 <TableRow key={email.id}>
+                  <TableCell>
+                    <Checkbox
+                      checked={checkedEmails.has(email.id)}
+                      onCheckedChange={(checked) => {
+                        handleEmailToggle(email.id, email, checked as boolean)
+                      }}
+                      disabled={isSaving}
+                    />
+                  </TableCell>
                   <TableCell>{email.from}</TableCell>
                   <TableCell>{email.subject}</TableCell>
                   <TableCell>{email.date}</TableCell>

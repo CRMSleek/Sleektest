@@ -184,6 +184,59 @@ export interface Database {
           customer_name?: string | null
         }
       }
+      emails: {
+        Row: {
+          id: string
+          user_id: string
+          gmail_message_id: string
+          thread_id: string | null
+          sender_name: string | null
+          sender_email: string
+          recipient_to: string | null
+          recipient_cc: string | null
+          recipient_bcc: string | null
+          subject: string | null
+          date: string
+          content_text: string | null
+          content_html: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          gmail_message_id: string
+          thread_id?: string | null
+          sender_name?: string | null
+          sender_email: string
+          recipient_to?: string | null
+          recipient_cc?: string | null
+          recipient_bcc?: string | null
+          subject?: string | null
+          date: string
+          content_text?: string | null
+          content_html?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          gmail_message_id?: string
+          thread_id?: string | null
+          sender_name?: string | null
+          sender_email?: string
+          recipient_to?: string | null
+          recipient_cc?: string | null
+          recipient_bcc?: string | null
+          subject?: string | null
+          date?: string
+          content_text?: string | null
+          content_html?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
     }
   }
 }
