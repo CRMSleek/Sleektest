@@ -443,9 +443,6 @@ export default function EmailPage() {
                         <DropdownMenuItem onClick={() => setShowEmailViewComponent(email)}>
                           View
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => toast({ title: "Delete Email", description: email.subject })}>
-                          Delete
-                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

@@ -7,20 +7,13 @@ import { CheckCircle, Users, BarChart3 } from "lucide-react"
 import { motion, useScroll, useTransform } from "framer-motion"
 import { useState, useEffect } from "react"
 import logo from '../public/logo.png'
-import PrivacyPolicyPage from "@/components/ui/privacy-policy"
 
 export default function HomePage() {
   const [isScrolled, setIsScrolled] = useState(false)
-  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false)
   const { scrollY } = useScroll()
   const navbarOpacity = useTransform(scrollY, [0, 100], [0, 1])
   const navbarY = useTransform(scrollY, [0, 100], [-100, 0])
 
-  const checkHash = () => {
-    if (window.location.hash === "#privacy") {
-      setShowPrivacyPolicy(true)
-    }
-  }
 
 
   useEffect(() => {
@@ -28,13 +21,9 @@ export default function HomePage() {
       setIsScrolled(window.scrollY > 100)
     }
   
-    checkHash()
-    window.addEventListener('hashchange', checkHash)
     window.addEventListener('scroll', handleScroll)
-  
     return () => {
       window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('hashchange', checkHash)
     }
   }, [])
 
@@ -219,7 +208,7 @@ export default function HomePage() {
               <span className="font-semibold">SleekCRM</span>
             </div>
             <div className="flex space-x-6 text-sm text-gray-400">
-              <a href='#privacy' onClick={() => setShowPrivacyPolicy(true)} className="hover:text-white transition-colors">
+              <a href='/privacy-policy' className="hover:text-white transition-colors">
                 Privacy Policy
               </a>
               <Link href="/" className="hover:text-white transition-colors">
@@ -235,7 +224,6 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
-      {showPrivacyPolicy && <PrivacyPolicyPage showPrivacyPolicy={showPrivacyPolicy} setShowPrivacyPolicy={setShowPrivacyPolicy} />}
     </motion.div>
   )
 }
