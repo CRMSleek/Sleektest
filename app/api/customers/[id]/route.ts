@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, context: { params: { id: string 
 
     const { data: customer, error } = await supabase
       .from('customers')
-      .select('id, name, email, phone, location, age, notes, created_at')
+      .select('id, name, email, phone, location, age, notes, relationship_type, created_at')
       .eq('id', id)
       .eq('business_id', user.business.id)
       .single()

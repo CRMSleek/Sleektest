@@ -79,7 +79,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-gray-700 transition-colors text-white"
             >
               <Users className="h-5 w-5" />
-              <span>Customers</span>
+              <span>Relationships</span>
             </Link>
             <Link
               href="/dashboard/settings"

@@ -9,9 +9,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import EmailSend from "@/components/ui/email-send"
 import EmailView from "@/components/ui/email-view"
-import { MoreHorizontal, Plus, Search, ChevronLeft, ChevronRight } from "lucide-react"
+import { MoreHorizontal, Plus, Search, ChevronLeft, ChevronRight, Link as LinkIcon } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { motion, easeOut } from "framer-motion"
+import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 export default function EmailPage() {
   const [OAuth, setOAuth] = useState(true)
@@ -30,6 +41,11 @@ export default function EmailPage() {
   const [savedEmailIds, setSavedEmailIds] = useState<Set<string>>(new Set())
   const [checkedEmails, setCheckedEmails] = useState<Set<string>>(new Set())
   const [isSaving, setIsSaving] = useState(false)
+  const [emailRelationships, setEmailRelationships] = useState<Map<string, any>>(new Map())
+  const [relationships, setRelationships] = useState<any[]>([])
+  const [selectedEmailForAttachment, setSelectedEmailForAttachment] = useState<any>(null)
+  const [selectedRelationshipId, setSelectedRelationshipId] = useState<string>("")
+  const [isAttachingEmail, setIsAttachingEmail] = useState(false)
   const { toast } = useToast()
 
   const fadeUp = {
@@ -103,18 +119,68 @@ export default function EmailPage() {
     }
   }
 
-  // Fetch saved email IDs on component mount
+  // Fetch saved email IDs and their relationships on component mount
   const fetchSavedEmailIds = async () => {
     try {
       const response = await fetch("/api/email/saved")
       if (response.ok) {
         const data = await response.json()
-        const savedIds = new Set(data.savedEmailIds || [])
+        const savedIds = new Set<string>(data.savedEmailIds || [])
         setSavedEmailIds(savedIds)
         setCheckedEmails(savedIds) // Initialize checked emails with saved ones
+        
+        // Fetch relationships for saved emails
+        if (savedIds.size > 0) {
+          fetchEmailRelationships(Array.from<string>(savedIds))
+        }
       }
     } catch (err) {
       console.error("Failed to fetch saved email IDs:", err)
+    }
+  }
+
+  // Fetch relationships for emails
+  const fetchEmailRelationships = async (emailIds: string[]) => {
+    try {
+      const relationshipsMap = new Map<string, any>()
+      await Promise.all(
+        emailIds.map(async (emailId) => {
+          try {
+            const response = await fetch(`/api/email/relationships?emailId=${emailId}`)
+            if (response.ok) {
+              const data = await response.json()
+              if (data.relationship) {
+                relationshipsMap.set(emailId, data.relationship)
+              }
+            }
+          } catch (err) {
+            // Silently handle individual failures
+          }
+        })
+      )
+      setEmailRelationships(relationshipsMap)
+    } catch (err) {
+      console.error("Failed to fetch email relationships:", err)
+    }
+  }
+
+  // Update relationships when emails are saved
+  useEffect(() => {
+    if (allEmails.length > 0 && savedEmailIds.size > 0) {
+      fetchEmailRelationships(Array.from(savedEmailIds))
+    }
+  }, [savedEmailIds, allEmails])
+
+  // Fetch all relationships for dropdown
+  const fetchRelationships = async () => {
+    try {
+      const response = await fetch("/api/email/relationships")
+      if (response.ok) {
+        const data = await response.json()
+        setRelationships(data.relationships || [])
+      }
+    } catch (err) {
+      console.error("Failed to fetch relationships:", err)
     }
   }
 
@@ -311,7 +377,49 @@ export default function EmailPage() {
     getOauth()
     fetchEmails()
     fetchSavedEmailIds()
+    fetchRelationships()
   }, [])
+
+  // Handle manual email attachment to relationship
+  const handleAttachEmailToRelationship = async () => {
+    if (!selectedEmailForAttachment || !selectedRelationshipId) return
+
+    setIsAttachingEmail(true)
+    try {
+      const response = await fetch("/api/email/relationships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emailId: selectedEmailForAttachment.id,
+          relationshipId: selectedRelationshipId,
+        }),
+      })
+
+      if (response.ok) {
+        const relationship = relationships.find((r) => r.id === selectedRelationshipId)
+        const newMap = new Map(emailRelationships)
+        newMap.set(selectedEmailForAttachment.id, relationship)
+        setEmailRelationships(newMap)
+
+        toast({
+          title: "Email attached",
+          description: `Email attached to ${relationship?.name || "relationship"}`,
+        })
+        setSelectedEmailForAttachment(null)
+        setSelectedRelationshipId("")
+      } else {
+        throw new Error("Failed to attach email")
+      }
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to attach email to relationship",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAttachingEmail(false)
+    }
+  }
 
   useEffect(() => {
     if (!OAuth) {
@@ -418,36 +526,106 @@ export default function EmailPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              emails.map((email) => (
-                <TableRow key={email.id}>
-                  <TableCell>
-                    <Checkbox
-                      checked={checkedEmails.has(email.id)}
-                      onCheckedChange={(checked) => {
-                        handleEmailToggle(email.id, email, checked as boolean)
-                      }}
-                      disabled={isSaving}
-                    />
-                  </TableCell>
-                  <TableCell>{email.from}</TableCell>
-                  <TableCell>{email.subject}</TableCell>
-                  <TableCell>{email.date}</TableCell>
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setShowEmailViewComponent(email)}>
-                          View
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
+              emails.map((email) => {
+                const attachedRelationship = emailRelationships.get(email.id)
+                return (
+                  <TableRow key={email.id}>
+                    <TableCell>
+                      <Checkbox
+                        checked={checkedEmails.has(email.id)}
+                        onCheckedChange={(checked) => {
+                          handleEmailToggle(email.id, email, checked as boolean)
+                        }}
+                        disabled={isSaving}
+                      />
+                    </TableCell>
+                    <TableCell>{email.from}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span>{email.subject}</span>
+                        {attachedRelationship && (
+                          <Badge variant="secondary" className="text-xs">
+                            {attachedRelationship.name}
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>{email.date}</TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setShowEmailViewComponent(email)}>
+                            View
+                          </DropdownMenuItem>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <DropdownMenuItem onSelect={(e) => {
+                                e.preventDefault()
+                                setSelectedEmailForAttachment(email)
+                                setSelectedRelationshipId(attachedRelationship?.id || "")
+                              }}>
+                                <LinkIcon className="mr-2 h-4 w-4" />
+                                {attachedRelationship ? "Change Relationship" : "Attach to Relationship"}
+                              </DropdownMenuItem>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Attach Email to Relationship</DialogTitle>
+                                <DialogDescription>
+                                  Select a relationship to attach this email to. The email will be associated with the selected relationship.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <div className="space-y-4 py-4">
+                                <div className="space-y-2">
+                                  <label className="text-sm font-medium">Email</label>
+                                  <div className="text-sm text-muted-foreground">
+                                    From: {email.from} <br />
+                                    Subject: {email.subject}
+                                  </div>
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="text-sm font-medium">Relationship</label>
+                                  <Select value={selectedRelationshipId} onValueChange={setSelectedRelationshipId}>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select a relationship" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {relationships.map((rel) => (
+                                        <SelectItem key={rel.id} value={rel.id}>
+                                          {rel.name} ({rel.email}) - {rel.relationship_type || "customer"}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                              <DialogFooter>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    setSelectedEmailForAttachment(null)
+                                    setSelectedRelationshipId("")
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button onClick={handleAttachEmailToRelationship} disabled={!selectedRelationshipId || isAttachingEmail}>
+                                  {isAttachingEmail ? "Attaching..." : "Attach"}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>

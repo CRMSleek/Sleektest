@@ -29,6 +29,8 @@ export const surveySchema = z.object({
     .min(1, "At least one question is required"),
 })
 
+export const relationshipTypes = ["customer", "lead", "partner", "vendor", "supplier", "contractor", "affiliate", "other"] as const
+
 export const customerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email address"),
@@ -36,6 +38,13 @@ export const customerSchema = z.object({
   location: z.string().optional(),
   age: z.number().min(1).max(120).optional(),
   notes: z.string().optional(),
+  relationship_type: z.enum(relationshipTypes).optional().default("customer"),
+})
+
+export const emailAutoAssignmentRuleSchema = z.object({
+  sender_email: z.string().email("Invalid email address"),
+  relationship_id: z.string().min(1, "Relationship is required"),
+  is_active: z.boolean().optional().default(true),
 })
 
 export const businessSettingsSchema = z.object({

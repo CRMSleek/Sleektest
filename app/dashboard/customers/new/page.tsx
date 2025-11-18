@@ -7,11 +7,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { ArrowLeft, Save } from "lucide-react"
 import Link from "next/link"
+import { relationshipTypes } from "@/lib/validations"
 
-export default function NewCustomerPage() {
+export default function NewRelationshipPage() {
   const router = useRouter()
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
@@ -22,6 +24,7 @@ export default function NewCustomerPage() {
     location: "",
     age: "",
     notes: "",
+    relationship_type: "customer",
   })
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -43,17 +46,17 @@ export default function NewCustomerPage() {
       if (response.ok) {
         toast({
           title: "Success",
-          description: "Customer created successfully",
+          description: "Relationship created successfully",
         })
         router.push("/dashboard/customers")
       } else {
         const error = await response.json()
-        throw new Error(error.error || "Failed to create customer")
+        throw new Error(error.error || "Failed to create relationship")
       }
     } catch (error) {
       toast({
         title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create customer",
+        description: error instanceof Error ? error.message : "Failed to create relationship",
         variant: "destructive",
       })
     } finally {
@@ -66,6 +69,10 @@ export default function NewCustomerPage() {
     setFormData(prev => ({ ...prev, [name]: value }))
   }
 
+  const handleSelectChange = (value: string) => {
+    setFormData(prev => ({ ...prev, relationship_type: value }))
+  }
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center gap-4">
@@ -75,14 +82,14 @@ export default function NewCustomerPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Add New Customer</h1>
-          <p className="text-muted-foreground">Create a new customer profile</p>
+          <h1 className="text-3xl font-bold tracking-tight">Add New Relationship</h1>
+          <p className="text-muted-foreground">Create a new relationship profile</p>
         </div>
       </div>
 
       <Card className="max-w-2xl">
         <CardHeader>
-          <CardTitle>Customer Information</CardTitle>
+          <CardTitle>Relationship Information</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -94,7 +101,7 @@ export default function NewCustomerPage() {
                   name="name"
                   value={formData.name}
                   onChange={handleChange}
-                  placeholder="Enter customer name"
+                  placeholder="Enter name"
                   required
                 />
               </div>
@@ -110,6 +117,22 @@ export default function NewCustomerPage() {
                   placeholder="Enter email address"
                   required
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="relationship_type">Relationship Type *</Label>
+                <Select value={formData.relationship_type} onValueChange={handleSelectChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select relationship type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {relationshipTypes.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {type.charAt(0).toUpperCase() + type.slice(1)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="space-y-2">
@@ -156,7 +179,7 @@ export default function NewCustomerPage() {
                 name="notes"
                 value={formData.notes}
                 onChange={handleChange}
-                placeholder="Add any additional notes about the customer"
+                placeholder="Add any additional notes about this relationship"
                 rows={3}
               />
             </div>
@@ -171,7 +194,7 @@ export default function NewCustomerPage() {
                 ) : (
                   <>
                     <Save className="mr-2 h-4 w-4" />
-                    Create Customer
+                    Create Relationship
                   </>
                 )}
               </Button>

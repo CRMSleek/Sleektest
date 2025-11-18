@@ -83,6 +83,57 @@ export async function POST(request: NextRequest) {
           results.errors.push(`Failed to save some emails: ${insertError.message}`)
         } else {
           results.saved = inserted?.map(e => e.gmail_message_id) || []
+          
+          // Auto-assign emails based on rules
+          if (inserted && inserted.length > 0) {
+            const senderEmails = newEmailsToInsert.map(e => e.sender_email)
+            
+            // Get active auto-assignment rules
+            const { data: rules } = await supabase
+              .from('email_auto_assignment_rules')
+              .select('sender_email, relationship_id')
+              .eq('user_id', user.id)
+              .eq('is_active', true)
+              .in('sender_email', senderEmails)
+
+            if (rules && rules.length > 0) {
+              const mappingsToInsert: any[] = []
+              
+              inserted.forEach((savedEmail) => {
+                const emailData = newEmailsToInsert.find(e => e.gmail_message_id === savedEmail.gmail_message_id)
+                if (emailData) {
+                  const rule = rules.find(r => r.sender_email.toLowerCase() === emailData.sender_email.toLowerCase())
+                  if (rule) {
+                    mappingsToInsert.push({
+                      id: nanoid(),
+                      user_id: user.id,
+                      email_id: savedEmail.gmail_message_id,
+                      relationship_id: rule.relationship_id,
+                    })
+                  }
+                }
+              })
+
+              if (mappingsToInsert.length > 0) {
+                // Check for existing mappings
+                const emailIds = mappingsToInsert.map(m => m.email_id)
+                const { data: existingMappings } = await supabase
+                  .from('email_relationship_mappings')
+                  .select('email_id')
+                  .eq('user_id', user.id)
+                  .in('email_id', emailIds)
+
+                const existingEmailIds = new Set(existingMappings?.map(m => m.email_id) || [])
+                const newMappings = mappingsToInsert.filter(m => !existingEmailIds.has(m.email_id))
+
+                if (newMappings.length > 0) {
+                  await supabase
+                    .from('email_relationship_mappings')
+                    .insert(newMappings)
+                }
+              }
+            }
+          }
         }
       }
     }

@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('customers')
-      .select('id, name, email, location, age, created_at')
+      .select('id, name, email, location, age, relationship_type, created_at')
       .eq('business_id', user.business.id)
       .order('name', { ascending: true })
 
@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
       email: c.email,
       location: c.location,
       age: c.age,
+      relationship_type: c.relationship_type || 'customer',
       createdAt: c.created_at,
       responses: [],
     }))
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
         ...validatedData,
         business_id: user.business.id,
       })
-      .select('id, name, email, location, age, created_at')
+      .select('id, name, email, location, age, relationship_type, created_at')
       .single()
 
     if (error) throw error
@@ -71,6 +72,7 @@ export async function POST(request: NextRequest) {
       email: customer.email,
       location: customer.location,
       age: customer.age,
+      relationship_type: customer.relationship_type || 'customer',
       createdAt: customer.created_at,
       responses: [],
     }

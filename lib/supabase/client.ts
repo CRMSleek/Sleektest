@@ -83,6 +83,7 @@ export interface Database {
           data: any | null
           location: string | null
           notes: string | null
+          relationship_type: string | null
           created_at: string
           updated_at: string
           business_id: string
@@ -96,6 +97,7 @@ export interface Database {
           data?: any | null
           location?: string | null
           notes?: string | null
+          relationship_type?: string | null
           created_at?: string
           updated_at?: string
           business_id: string
@@ -109,9 +111,62 @@ export interface Database {
           data?: any | null
           location?: string | null
           notes?: string | null
+          relationship_type?: string | null
           created_at?: string
           updated_at?: string
           business_id?: string
+        }
+      }
+      email_relationship_mappings: {
+        Row: {
+          id: string
+          user_id: string
+          email_id: string
+          relationship_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          email_id: string
+          relationship_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          email_id?: string
+          relationship_id?: string
+          created_at?: string
+        }
+      }
+      email_auto_assignment_rules: {
+        Row: {
+          id: string
+          user_id: string
+          sender_email: string
+          relationship_id: string
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          sender_email: string
+          relationship_id: string
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          sender_email?: string
+          relationship_id?: string
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
         }
       }
       surveys: {

@@ -9,9 +9,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { ArrowLeft, Edit, Save, X, Calendar, MapPin, Phone, Mail, User } from "lucide-react"
 import Link from "next/link"
+import { relationshipTypes } from "@/lib/validations"
 
 interface Customer {
   id: string
@@ -21,6 +23,7 @@ interface Customer {
   location?: string
   age?: number
   notes?: string
+  relationship_type?: string
   createdAt: string
   responses: Array<{
     id: string
@@ -44,6 +47,7 @@ export default function CustomerDetailPage() {
     location: "",
     age: "",
     notes: "",
+    relationship_type: "customer",
   })
 
   useEffect(() => {
@@ -65,6 +69,7 @@ export default function CustomerDetailPage() {
           location: data.customer.location || "",
           age: data.customer.age?.toString() || "",
           notes: data.customer.notes || "",
+          relationship_type: data.customer.relationship_type || "customer",
         })
       } else {
         toast({
@@ -285,6 +290,21 @@ export default function CustomerDetailPage() {
                 </div>
 
                 <div className="space-y-2">
+                  <Label htmlFor="relationship_type">Relationship Type</Label>
+                  <Select value={formData.relationship_type} onValueChange={(value) => setFormData({ ...formData, relationship_type: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select relationship type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {relationshipTypes.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="notes">Notes</Label>
                   <Textarea
                     id="notes"
@@ -300,6 +320,11 @@ export default function CustomerDetailPage() {
                 <div className="flex items-center gap-2">
                   <User className="h-4 w-4 text-muted-foreground" />
                   <span className="font-medium">{customer.name}</span>
+                  {customer.relationship_type && (
+                    <Badge variant="secondary" className="ml-2">
+                      {customer.relationship_type.charAt(0).toUpperCase() + customer.relationship_type.slice(1)}
+                    </Badge>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Mail className="h-4 w-4 text-muted-foreground" />
