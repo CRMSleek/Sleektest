@@ -208,9 +208,9 @@ export default function HomePage() {
               <span className="font-semibold">SleekCRM</span>
             </div>
             <div className="flex space-x-6 text-sm text-gray-400">
-              <a href='/privacy-policy' className="hover:text-white transition-colors">
+              <Link href='/privacy-policy' className="hover:text-white transition-colors">
                 Privacy Policy
-              </a>
+              </Link>
               <Link href="/" className="hover:text-white transition-colors">
                 Terms of Service
               </Link>
