@@ -5,7 +5,7 @@ import { verifyToken } from "./lib/supabase/auth"
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   
-  const publicRoutes = ["/", "/login", "/register", "/features", "/pricing", "/about"]
+  const publicRoutes = ["/", "/login", "/register", "/features", "/pricing", "/about", "privacy-policy"]
   const isPublicRoute = publicRoutes.includes(pathname) || pathname.startsWith("/survey/")
   
   if (pathname.startsWith("/dashboard")) {
