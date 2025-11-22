@@ -40,9 +40,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ message: "This account is not connected to gmail" }, { status: 404 })
         }
         
-        const cookieName = process.env.NODE_ENV === "production"
-          ? "__Secure-authjs.session-token"
-          : "authjs.session-token";
+        const cookieName = "__Secure-authjs.session-token"
 
         const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET, cookieName })
 
