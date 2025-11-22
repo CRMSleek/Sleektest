@@ -39,8 +39,12 @@ export async function POST(request: NextRequest) {
         if (!user.google_id) {
             return NextResponse.json({ message: "This account is not connected to gmail" }, { status: 404 })
         }
+        
+        const cookieName = process.env.NODE_ENV === "production"
+          ? "__Secure-authjs.session-token"
+          : "authjs.session-token";
 
-        const token: any = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
+        const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET, cookieName })
 
         if (!token || !token.refreshToken) {
             return NextResponse.json({ error: "No Google refresh token found. Please connect/reconnect your Google account." }, { status: 401 })
