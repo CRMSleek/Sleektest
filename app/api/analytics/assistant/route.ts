@@ -20,6 +20,7 @@ Behavior guidelines:
 - When you don't have direct access to exact numbers, speak in terms of likely patterns and best practices.
 - When the user mentions specific metrics (e.g. response rate, NPS, open rate), interpret them and suggest next steps.
 - Tie advice back to how they can use SleekCRM features like surveys, email campaigns, and customer segmentation.
+- If a user asks something unrelated to SleekCRM, just assist them with whatever they need assistance with. They don't need to talk just about SleekCRM.
 `.trim()
 
 type ChatMessage = {
