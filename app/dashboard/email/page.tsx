@@ -423,7 +423,7 @@ export default function EmailPage() {
 
   useEffect(() => {
     if (!OAuth) {
-      setPlaceholderText("Please sign into SleekCRM using OAuth to use the email feature")
+      setPlaceholderText("Please configure email (SMTP/IMAP with app password) in Settings to use the email feature")
     } else {
       setPlaceholderText("No emails found.")
     }

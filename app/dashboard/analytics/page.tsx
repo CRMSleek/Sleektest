@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AnalyticsChart } from "@/components/dashboard/analytics-chart"
 import { AnalyticsInsights } from "@/components/dashboard/analytics-insights"
+import { AnalyticsAssistantChat } from "@/components/dashboard/analytics-assistant-chat"
 import { AnalyticsMetrics } from "@/components/dashboard/analytics-metrics"
 import { motion } from "framer-motion"
 
@@ -28,11 +29,12 @@ export default function AnalyticsPage() {
 
       <Tabs defaultValue="overview">
         <motion.div initial="hidden" animate="visible" variants={fadeUp}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="demographics">Demographics</TabsTrigger>
             <TabsTrigger value="satisfaction">Satisfaction</TabsTrigger>
             <TabsTrigger value="insights">AI Insights</TabsTrigger>
+            <TabsTrigger value="assistant">Assistant</TabsTrigger>
           </TabsList>
         </motion.div>
 
@@ -119,6 +121,17 @@ export default function AnalyticsPage() {
             transition={{ delay: 0, duration: 0.6 }}
           >
             <AnalyticsInsights />
+          </motion.div>
+        </TabsContent>
+
+        <TabsContent value="assistant" className="space-y-6 pt-4">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.2 }}
+            transition={{ delay: 0, duration: 0.6 }}
+          >
+            <AnalyticsAssistantChat />
           </motion.div>
         </TabsContent>
       </Tabs>

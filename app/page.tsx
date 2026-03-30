@@ -150,7 +150,7 @@ export default function HomePage() {
                 <Button
                   variant="outline"
                   size="lg"
-                  className="border-gray-400 text-gray-300 hover:bg-gray-700 hover:text-white px-8 py-3 text-lg"
+                  className="border-gray-400 hover:bg-gray-700 hover:text-white px-8 py-3 text-lg"
                 >
                   Learn More
                 </Button>

@@ -43,10 +43,6 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
             "openid",
             "email",
             "profile",
-            // include readonly so server can list/read messages
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/userinfo.email",
           ].join(" "),
           access_type: "offline",
           prompt: "consent",

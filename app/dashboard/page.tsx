@@ -84,7 +84,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 bg-gray-900 min-h-screen text-white">
+    <div className="p-6 space-y-6 min-h-screen">
       <motion.div
         className="flex justify-between items-center"
         initial="hidden"
@@ -119,7 +119,7 @@ export default function DashboardPage() {
             viewport={{ once: true, amount: 0.3 }}
             variants={fadeUp}
           >
-            <Card className="bg-gray-800 border-gray-700 text-white">
+            <Card className="">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">{card.title}</CardTitle>
                 {card.icon}
@@ -141,7 +141,7 @@ export default function DashboardPage() {
         variants={fadeUp}
         custom={0}
       >
-        <Card className="bg-gray-800 border-gray-700 text-white">
+        <Card className="">
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription className="text-gray-400">Common tasks to get you started</CardDescription>
@@ -149,25 +149,25 @@ export default function DashboardPage() {
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Link href="/dashboard/surveys/new">
-                <Button variant="outline" className="w-full h-20 flex flex-col border-gray-600 bg-gray-900 text-white hover:bg-gray-700">
+                <Button variant="outline" className="w-full h-20 flex flex-col hover:bg-gray-700">
                   <Plus className="h-6 w-6 mb-2" />
                   Create Survey
                 </Button>
               </Link>
               <Link href="/dashboard/surveys">
-                <Button variant="outline" className="w-full h-20 flex flex-col border-gray-600 bg-gray-900 text-white hover:bg-gray-700">
+                <Button variant="outline" className="w-full h-20 flex flex-col hover:bg-gray-700">
                   <FileText className="h-6 w-6 mb-2" />
                   View Surveys
                 </Button>
               </Link>
               <Link href="/dashboard/customers">
-                <Button variant="outline" className="w-full h-20 flex flex-col border-gray-600 bg-gray-900 text-white hover:bg-gray-700">
+                <Button variant="outline" className="w-full h-20 flex flex-col hover:bg-gray-700">
                   <Users className="h-6 w-6 mb-2" />
                   Manage Customers
                 </Button>
               </Link>
               <Link href="/dashboard/analytics">
-                <Button variant="outline" className="w-full h-20 flex flex-col border-gray-600 bg-gray-900 text-white hover:bg-gray-700">
+                <Button variant="outline" className="w-full h-20 flex flex-col hover:bg-gray-700">
                   <BarChart3 className="h-6 w-6 mb-2" />
                   View Analytics
                 </Button>
@@ -185,7 +185,7 @@ export default function DashboardPage() {
         variants={fadeUp}
         custom={1}
       >
-        <Card className="bg-gray-800 border-gray-700 text-white">
+        <Card className="">
           <CardHeader>
             <CardTitle>Recent Activity</CardTitle>
           </CardHeader>

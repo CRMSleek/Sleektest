@@ -292,6 +292,128 @@ export interface Database {
           updated_at?: string
         }
       }
+      email_settings: {
+        Row: {
+          id: string
+          user_id: string
+          email: string
+          app_password: string
+          smtp_host: string | null
+          smtp_port: number | null
+          smtp_secure: boolean
+          imap_host: string | null
+          imap_port: number | null
+          imap_secure: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          email: string
+          app_password: string
+          smtp_host?: string | null
+          smtp_port?: number | null
+          smtp_secure?: boolean
+          imap_host?: string | null
+          imap_port?: number | null
+          imap_secure?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          email?: string
+          app_password?: string
+          smtp_host?: string | null
+          smtp_port?: number | null
+          smtp_secure?: boolean
+          imap_host?: string | null
+          imap_port?: number | null
+          imap_secure?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      user_preferences: {
+        Row: {
+          id: string
+          user_id: string
+          theme: string | null
+          email_notifications: boolean
+          survey_responses: boolean
+          weekly_reports: boolean
+          marketing_emails: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          theme?: string | null
+          email_notifications?: boolean
+          survey_responses?: boolean
+          weekly_reports?: boolean
+          marketing_emails?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          theme?: string | null
+          email_notifications?: boolean
+          survey_responses?: boolean
+          weekly_reports?: boolean
+          marketing_emails?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      analytics_assistant_context: {
+        Row: {
+          user_id: string
+          rolling_summary: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          rolling_summary?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          rolling_summary?: string
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      analytics_assistant_messages: {
+        Row: {
+          id: string
+          user_id: string
+          role: string
+          content: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          role: string
+          content: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          role?: string
+          content?: string
+          created_at?: string
+        }
+      }
     }
   }
 }

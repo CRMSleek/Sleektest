@@ -11,6 +11,9 @@ export async function POST(request: NextRequest) {
 
     const userId = user.id
 
+    await supabase.from("analytics_assistant_messages").delete().eq("user_id", userId)
+    await supabase.from("analytics_assistant_context").delete().eq("user_id", userId)
+
     // Delete in order to respect foreign key constraints
     // Even though CASCADE is set up, we'll do it explicitly for clarity and to ensure cleanup
 

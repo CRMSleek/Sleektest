@@ -9,6 +9,7 @@ import { Bold, Italic, Underline as UnderlineIcon, AlignLeft, AlignCenter, Align
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Upload } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface EmailSendProps {
   isOpen: boolean
@@ -28,6 +29,8 @@ function EmailSend({ isOpen, onClose, mode = 'compose', originalEmail }: EmailSe
   const [showBcc, setShowBcc] = useState(false)
   const { toast } = useToast()
   const [files, setFiles] = useState<File[]>([])
+  const [customers, setCustomers] = useState<Array<{ id: string; name: string; email: string | null }>>([])
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("")
   
   const editor = useEditor({
     immediatelyRender: false,
@@ -75,7 +78,39 @@ function EmailSend({ isOpen, onClose, mode = 'compose', originalEmail }: EmailSe
   
   useEffect(() => {
     getOauth()
+    fetchCustomers()
   }, [])
+
+  const fetchCustomers = async () => {
+    try {
+      const response = await fetch("/api/customers")
+      if (response.ok) {
+        const data = await response.json()
+        setCustomers(data.customers || [])
+      }
+    } catch (error) {
+      console.error("Failed to fetch customers:", error)
+    }
+  }
+
+  const handleCustomerSelect = (customerId: string) => {
+    setSelectedCustomerId(customerId)
+    const customer = customers.find((c) => c.id === customerId)
+    if (customer && customer.email) {
+      // If "To" field already has content, append with comma
+      if (to && !to.includes(customer.email)) {
+        setTo(`${to}, ${customer.email}`)
+      } else if (!to) {
+        setTo(customer.email)
+      }
+    } else {
+      toast({
+        title: "No email",
+        description: "Selected customer does not have an email address.",
+        variant: "destructive",
+      })
+    }
+  }
   
   const getOauth = async () => {
     try {
@@ -85,7 +120,7 @@ function EmailSend({ isOpen, onClose, mode = 'compose', originalEmail }: EmailSe
         setOAuth(responseJson.OAuth)
       }
     } catch (error) {
-      console.error("Fetch oauth status error", error)
+      console.error("Fetch email configuration status error", error)
     }
   }
 
@@ -181,6 +216,25 @@ function EmailSend({ isOpen, onClose, mode = 'compose', originalEmail }: EmailSe
         </h2>
 
         <form className="flex flex-col gap-3" onSubmit={sendEmail}>
+          {mode === 'compose' && customers.length > 0 && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Select Customer (Optional)</label>
+              <Select value={selectedCustomerId} onValueChange={handleCustomerSelect}>
+                <SelectTrigger className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-black bg-gray-100">
+                  <SelectValue placeholder="Choose a customer to auto-fill email..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers
+                    .filter((c) => c.email)
+                    .map((customer) => (
+                      <SelectItem key={customer.id} value={customer.id}>
+                        {customer.name} ({customer.email})
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <input
             type="text"
             placeholder="To (Comma and space separated list for multiple recipients)"
