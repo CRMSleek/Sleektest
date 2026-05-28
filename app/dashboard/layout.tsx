@@ -5,7 +5,7 @@ import { useAuth } from "@/components/auth-provider"
 import Link from "next/link"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
-import { BarChart3, Users, FileText, Settings, LogOut, Mail } from "lucide-react"
+import { BarChart3, Bot, Users, FileText, Settings, LogOut, Mail } from "lucide-react"
 import { useTheme } from "next-themes"
 import logo from "../../public/logo.png"
 
@@ -81,6 +81,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span>Dashboard</span>
             </Link>
             <Link
+              href="/dashboard/agent"
+              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
+            >
+              <Bot className="h-5 w-5" />
+              <span>Agent</span>
+            </Link>
+            <Link
               href="/dashboard/surveys"
               className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
             >
@@ -92,7 +99,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
             >
               <Mail className="h-5 w-5" />
-              <span>Email</span>
+              <span>Emails</span>
             </Link>
             <Link
               href="/dashboard/customers"

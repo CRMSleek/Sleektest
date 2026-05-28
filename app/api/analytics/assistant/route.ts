@@ -2,6 +2,12 @@ import { type NextRequest, NextResponse } from "next/server"
 import OpenAI from "openai"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { supabase } from "@/lib/supabase/client"
+import {
+  buildAnalyticsWorkspace,
+  executeWorkspaceAction,
+  formatWorkspaceContext,
+  type AnalyticsWorkspace,
+} from "@/lib/agentic-crm"
 
 export const runtime = "nodejs"
 
@@ -11,21 +17,22 @@ const client = new OpenAI({
 })
 
 const SYSTEM_PROMPT = `
-You are the SleekCRM Analytics Assistant embedded inside a CRM dashboard.
+You are the SleekCRM analytics agent. The product is action-first.
 
-Primary goals:
-- Help users understand their customer analytics, surveys, and email engagement conceptually.
-- Suggest concrete actions to improve customer satisfaction, conversion, and retention.
-- Explain ideas clearly in simple, non-technical language unless the user asks for technical detail.
+Your job:
+- Explain the current workspace state clearly.
+- Keep the user focused on one concrete action in the center panel.
+- Reference grounded signals from customers, surveys, emails, and responses.
+- Mention source citations when possible.
+- Be concise, direct, and useful.
+- Prefer a recommendation that can be approved and executed immediately.
 
-Behavior guidelines:
-- Be concise but insightful. Prefer clear bullet points for recommendations.
-- When you don't have direct access to exact numbers, speak in terms of likely patterns and best practices.
-- When the user mentions specific metrics (e.g. response rate, NPS, open rate), interpret them and suggest next steps.
-- Tie advice back to how they can use SleekCRM features like surveys, email campaigns, and customer segmentation.
+Style:
+- Use plain language and short bullets when helpful.
+- Do not invent data that is not in the workspace context.
+- If the user asks to act, respond with the next step and the rationale.
 `.trim()
 
-/** Keep stored + prompt context bounded for Groq TPM limits */
 const MAX_STORED_MESSAGES = 40
 const MAX_CONTEXT_CHARS = 9000
 const COMPRESS_BATCH = 12
@@ -92,7 +99,7 @@ function shouldCompress(messages: DbMessage[]) {
 }
 
 async function mergeSummaries(prev: string, transcript: string): Promise<string> {
-  const input = `You compress CRM analytics chat history. Merge the prior summary with the new transcript. Preserve: user goals, named metrics, decisions, open questions, product areas (surveys, email, customers). Max ~600 words. Plain text only, no JSON.
+  const input = `You compress CRM analytics chat history. Merge the prior summary with the new transcript. Preserve: user goals, named metrics, decisions, open questions, product areas (surveys, email, customers), and any approved actions. Max ~600 words. Plain text only, no JSON.
 
 Prior summary:
 ${prev || "(none)"}
@@ -112,6 +119,7 @@ Merged summary:`.trim()
   } catch (e) {
     console.warn("mergeSummaries LLM failed, using text fallback:", e)
   }
+
   const fallback = [prev, transcript.slice(0, 4000)].filter(Boolean).join("\n---\n")
   return fallback.slice(0, 8000)
 }
@@ -139,21 +147,40 @@ async function ensureWithinLimits(userId: string): Promise<void> {
   }
 }
 
-function buildModelInput(rollingSummary: string, messages: DbMessage[], userName?: string | null) {
+function buildAssistantInput(rollingSummary: string, messages: DbMessage[], userName: string | null | undefined, workspace: AnalyticsWorkspace | null) {
   const who = userName ? `The user's display name is ${userName}.` : ""
   const summaryBlock = rollingSummary
     ? `Earlier conversation (compressed summary):\n${rollingSummary}\n`
     : ""
   const recent = messages.map((m) => `${m.role}: ${m.content}`).join("\n")
+  const workspaceContext = formatWorkspaceContext(workspace)
+
   return `${SYSTEM_PROMPT}
 
 ${who}
 ${summaryBlock}
+Current workspace:
+${workspaceContext}
+
 Recent messages:
 ${recent}
 
-Continue as the SleekCRM Analytics Assistant. One helpful reply only, no JSON or markdown code fences.
+Continue as the SleekCRM analytics agent. One helpful reply only. No JSON or markdown code fences.
 Assistant:`.trim()
+}
+
+function fallbackReply(workspace: AnalyticsWorkspace | null) {
+  if (!workspace) {
+    return "I could not load your CRM workspace. Sync customer, survey, or email data and try again."
+  }
+
+  const action = workspace.action
+  return [
+    workspace.brief.headline,
+    workspace.brief.whyNow,
+    `Recommended action: ${action.title} (${Math.round(action.confidence * 100)}% confidence).`,
+    `Sources: ${action.citations.map((citation) => `${citation.label} - ${citation.detail}`).join("; ")}`,
+  ].join("\n")
 }
 
 export async function GET(request: NextRequest) {
@@ -164,6 +191,8 @@ export async function GET(request: NextRequest) {
     }
 
     const messages = await listMessages(user.id)
+    const workspace = await buildAnalyticsWorkspace(user)
+
     return NextResponse.json({
       messages: messages.map((m) => ({
         id: m.id,
@@ -171,6 +200,7 @@ export async function GET(request: NextRequest) {
         content: m.content,
         created_at: m.created_at,
       })),
+      workspace,
     })
   } catch (e) {
     console.error("Assistant GET error:", e)
@@ -185,10 +215,46 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const body = (await request.json()) as { content?: string }
+    const body = (await request.json().catch(() => ({}))) as {
+      content?: string
+      mode?: "chat" | "approve" | "refresh"
+    }
+
+    const mode = body.mode || (body.content ? "chat" : "refresh")
+    const workspace = await buildAnalyticsWorkspace(user)
+
+    if (mode === "approve") {
+      if (!workspace) {
+        return NextResponse.json({ error: "Workspace not available" }, { status: 404 })
+      }
+
+      const result = await executeWorkspaceAction(user, workspace.action, request)
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error, needsCredentials: result.needsCredentials ?? false }, { status: 400 })
+      }
+
+      const confirmation = `Approved: ${result.message}.`
+      const { error: insertAssistantErr } = await supabase.from("analytics_assistant_messages").insert({
+        user_id: user.id,
+        role: "assistant",
+        content: confirmation,
+        created_at: new Date().toISOString(),
+      })
+      if (insertAssistantErr) {
+        console.error("insert assistant approval message:", insertAssistantErr)
+      }
+
+      const updatedWorkspace = await buildAnalyticsWorkspace(user)
+      return NextResponse.json({
+        reply: confirmation,
+        workspace: updatedWorkspace,
+        result,
+      })
+    }
+
     const content = typeof body.content === "string" ? body.content.trim() : ""
     if (!content) {
-      return NextResponse.json({ error: "content is required" }, { status: 400 })
+      return NextResponse.json({ error: "content is required for chat messages" }, { status: 400 })
     }
 
     await ensureWithinLimits(user.id)
@@ -209,17 +275,21 @@ export async function POST(request: NextRequest) {
 
     const rollingSummary = await getRollingSummary(user.id)
     const messages = await listMessages(user.id)
+    const input = buildAssistantInput(rollingSummary, messages, user.name, workspace)
 
-    const input = buildModelInput(rollingSummary, messages, user.name)
+    let reply = ""
+    try {
+      const response = await client.responses.create({
+        model: "openai/gpt-oss-20b",
+        input,
+      })
+      reply = (response.output_text || "").trim()
+    } catch (error) {
+      console.warn("Assistant model failed, using fallback:", error)
+    }
 
-    const response = await client.responses.create({
-      model: "openai/gpt-oss-20b",
-      input,
-    })
-
-    const reply = (response.output_text || "").trim()
     if (!reply) {
-      return NextResponse.json({ error: "Empty model response" }, { status: 502 })
+      reply = fallbackReply(workspace)
     }
 
     const { error: insertAsstErr } = await supabase.from("analytics_assistant_messages").insert({
@@ -235,12 +305,21 @@ export async function POST(request: NextRequest) {
     await ensureWithinLimits(user.id)
 
     const updated = await listMessages(user.id)
-    return NextResponse.json({ reply, messages: updated })
+    const updatedWorkspace = workspace || (await buildAnalyticsWorkspace(user))
+
+    return NextResponse.json({
+      reply,
+      messages: updated.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        created_at: m.created_at,
+      })),
+      workspace: updatedWorkspace,
+    })
   } catch (error) {
     console.error("SleekCRM assistant error:", error)
-    return NextResponse.json(
-      { error: "Something went wrong while processing your request. Please try again." },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "SleekCRM assistant failed to respond" }, { status: 500 })
   }
 }
+
