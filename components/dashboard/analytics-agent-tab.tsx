@@ -20,13 +20,17 @@ import {
   X,
   MessageSquare,
   Clock,
+  Trash2,
 } from "lucide-react"
+import Link from "next/link"
 import type { LucideIcon } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 type MetricWithChange = {
   value: number
@@ -117,9 +121,9 @@ const fadeUp = {
 }
 
 const modalVariants = {
-  hidden: { opacity: 0, scale: 0.95, y: -8 },
-  visible: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.2, ease: "easeOut" } },
-  exit: { opacity: 0, scale: 0.95, y: -8, transition: { duration: 0.15, ease: "easeIn" } },
+  hidden: { opacity: 0, scale: 0.95 },
+  visible: { opacity: 1, scale: 1, transition: { duration: 0.2, ease: "easeOut" as const } },
+  exit: { opacity: 0, scale: 0.95, transition: { duration: 0.15, ease: "easeIn" as const } },
 }
 
 function csvEscape(value: unknown) {
@@ -174,6 +178,27 @@ function buildPlaceholderRows(data: AnalyticsData | null) {
   )
 
   return rows
+}
+
+function parseAgentMessage(content: string) {
+  const jsonBlockRegex = /```json\s+([\s\S]*?)\s+```/g;
+  let match;
+  let textContent = content;
+  let actionPayload = null;
+
+  while ((match = jsonBlockRegex.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed && parsed.proposedAction) {
+        actionPayload = parsed.proposedAction;
+        textContent = textContent.replace(match[0], '');
+      }
+    } catch (e) {
+      // Ignore invalid JSON or unrelated JSON blocks
+    }
+  }
+
+  return { textContent: textContent.trim(), actionPayload };
 }
 
 function deriveTasks(data: AnalyticsData | null): TaskItem[] {
@@ -296,18 +321,19 @@ function ChatHistoryModal({
   sending: boolean
   onOpenChat: (id: string) => void
   onNewChat: () => void
+  onDeleteChat: (id: string) => void
 }) {
   return (
     <AnimatePresence>
       {open && (
-        <>
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={onClose}
           />
 
@@ -317,7 +343,7 @@ function ChatHistoryModal({
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-primary/20 bg-background/98 shadow-2xl backdrop-blur-xl"
+            className="relative z-10 w-full max-w-sm rounded-2xl border border-primary/20 bg-background/98 shadow-2xl backdrop-blur-xl"
           >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-primary/10 px-5 py-4">
@@ -339,7 +365,7 @@ function ChatHistoryModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/10 bg-background/80 text-muted-foreground transition-colors hover:bg-muted"
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/20 bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -377,6 +403,17 @@ function ChatHistoryModal({
                           </div>
                         </div>
                         {active && <Badge variant="secondary" className="shrink-0 text-xs">Current</Badge>}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onDeleteChat(chat.id)
+                          }}
+                          className="shrink-0 rounded-full p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          title="Delete chat"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </button>
                     )
                   })
@@ -390,14 +427,14 @@ function ChatHistoryModal({
               </div>
             </ScrollArea>
           </motion.div>
-        </>
+        </div>
       )}
     </AnimatePresence>
   )
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
-export function AnalyticsAgentTab() {
+export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
   const [hasGenerated, setHasGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<AnalyticsData | null>(null)
@@ -421,7 +458,7 @@ export function AnalyticsAgentTab() {
 
   // ─── Draggable divider state ────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null)
-  const [leftWidthPct, setLeftWidthPct] = useState(42) // percent
+  const [leftWidthPct, setLeftWidthPct] = useState(60) // percent
   const isDragging = useRef(false)
   const dragStartX = useRef(0)
   const dragStartPct = useRef(0)
@@ -692,6 +729,25 @@ export function AnalyticsAgentTab() {
     setStatus("")
   }
 
+  const deleteChat = async (chatId: string) => {
+    // Optimistic UI update
+    setChats((prev) => prev.filter((c) => c.id !== chatId))
+    if (activeChatId === chatId) {
+      setActiveChatId(null)
+      setMessages([WELCOME])
+    }
+
+    try {
+      await fetch(`/api/analytics/assistant?chatId=${encodeURIComponent(chatId)}`, {
+        method: "DELETE",
+      })
+    } catch (e) {
+      console.error("Failed to delete chat:", e)
+      // On failure, reload chats
+      void loadChat(activeChatId || undefined)
+    }
+  }
+
   // ─── Welcome screen ───────────────────────────────────────────────────────────
   if (!hasGenerated) {
     return (
@@ -733,6 +789,7 @@ export function AnalyticsAgentTab() {
           setChatHistoryOpen(false)
           void activateAgent()
         }}
+        onDeleteChat={deleteChat}
       />
 
       {/* Hidden file input */}
@@ -921,51 +978,113 @@ export function AnalyticsAgentTab() {
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
+              {closeHref && (
+                <Link
+                  href={closeHref}
+                  aria-label="Close agent"
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/20 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Link>
+              )}
             </div>
           </div>
 
           {/* Messages area */}
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 px-5 py-5">
-              {messages.map((message, index) => (
-                <motion.div
-                  key={message.id}
-                  variants={fadeUp}
-                  initial="hidden"
-                  animate="visible"
-                  custom={index}
-                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "border border-primary/10 bg-background/95"
-                    }`}
+              {messages.map((message, index) => {
+                const { textContent, actionPayload } = message.role === "assistant" 
+                  ? parseAgentMessage(message.content) 
+                  : { textContent: message.content, actionPayload: null }
+
+                return (
+                  <motion.div
+                    key={message.id}
+                    variants={fadeUp}
+                    initial="hidden"
+                    animate="visible"
+                    custom={index}
+                    className={`flex flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
                   >
-                    {message.content}
-                    {/* Attachment previews */}
-                    {message.attachments && message.attachments.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {message.attachments.map((file) => (
-                          <div
-                            key={file.id}
-                            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs ${
-                              message.role === "user"
-                                ? "bg-primary-foreground/15 text-primary-foreground"
-                                : "border border-primary/10 bg-muted/50"
-                            }`}
-                          >
-                            <Paperclip className="h-3 w-3" />
-                            <span className="max-w-[120px] truncate">{file.name}</span>
-                            <span className="opacity-60">({formatFileSize(file.size)})</span>
-                          </div>
-                        ))}
+                    <div
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                        message.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "border border-primary/10 bg-background/95"
+                      }`}
+                    >
+                      {message.role === "user" ? (
+                        textContent
+                      ) : (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ node, ...props }) => <p className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+                            ul: ({ node, ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
+                            ol: ({ node, ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
+                            li: ({ node, ...props }) => <li className="leading-relaxed" {...props} />,
+                            a: ({ node, ...props }) => <a className="text-primary underline underline-offset-4 hover:text-primary/80" {...props} />,
+                            strong: ({ node, ...props }) => <strong className="font-semibold text-foreground" {...props} />,
+                            h3: ({ node, ...props }) => <h3 className="mt-4 mb-2 font-semibold tracking-tight" {...props} />,
+                            // @ts-ignore
+                            code: ({ node, inline, ...props }) => 
+                              inline ? (
+                                <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground" {...props} />
+                              ) : (
+                                <pre className="mt-2 mb-2 overflow-x-auto rounded-lg bg-muted/50 p-3">
+                                  <code className="font-mono text-xs text-muted-foreground" {...props} />
+                                </pre>
+                              ),
+                          }}
+                        >
+                          {textContent}
+                        </ReactMarkdown>
+                      )}
+                      {/* Attachment previews */}
+                      {message.attachments && message.attachments.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {message.attachments.map((file) => (
+                            <div
+                              key={file.id}
+                              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs ${
+                                message.role === "user"
+                                  ? "bg-primary-foreground/15 text-primary-foreground"
+                                  : "border border-primary/10 bg-muted/50"
+                              }`}
+                            >
+                              <Paperclip className="h-3 w-3" />
+                              <span className="max-w-[120px] truncate">{file.name}</span>
+                              <span className="opacity-60">({formatFileSize(file.size)})</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Interactive Action Block */}
+                    {actionPayload && (
+                      <div className="mt-3 max-w-[85%] rounded-xl border border-primary/20 bg-card p-4 shadow-sm">
+                        <p className="mb-3 text-sm font-semibold">{actionPayload.title}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {actionPayload.options.map((opt: any, i: number) => (
+                            <Button
+                              key={i}
+                              size="sm"
+                              variant={i === 0 ? "default" : "outline"}
+                              className="rounded-full text-xs"
+                              onClick={() => void sendChat(opt.value)}
+                              disabled={sending}
+                            >
+                              {opt.label}
+                            </Button>
+                          ))}
+                        </div>
                       </div>
                     )}
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                )
+              })}
               <div ref={messagesEndRef} />
             </div>
           </ScrollArea>

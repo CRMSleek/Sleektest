@@ -28,12 +28,27 @@ Your job:
 - Prefer a recommendation that can be approved and executed immediately.
 
 Style:
-- Use plain language and short bullets when helpful.
+- Use plain language, markdown formatting (bold, italics), and short bullets when helpful.
 - Do not invent data that is not in the workspace context.
 - If the user asks to act, respond with the next step and the rationale.
+
+Interactive Actions:
+- If you propose an action for the user to take (e.g., "Draft and Send email?"), you MUST include a JSON block at the very end of your message in this exact format to render interactive buttons:
+\`\`\`json
+{
+  "proposedAction": {
+    "title": "Draft and Send email?",
+    "options": [
+      { "label": "Yes", "value": "Yes, please draft it." },
+      { "label": "No", "value": "No, let's skip this." },
+      { "label": "Add Info", "value": "I want to add more information first." }
+    ]
+  }
+}
+\`\`\`
 `.trim()
 
-const MODEL = "deepseek/deepseek-v4-flash:free"
+const MODEL = "google/gemma-4-31b-it:free"
 
 const MAX_STORED_MESSAGES = 40
 const MAX_CONTEXT_CHARS = 9000
@@ -78,6 +93,23 @@ async function listChats(userId: string): Promise<AssistantChat[]> {
   }
 
   return (data as AssistantChat[]) || []
+}
+
+async function cleanupEmptyChats(userId: string, excludeChatId?: string) {
+  const { data: emptyChats } = await supabase
+    .from("analytics_assistant_chats")
+    .select("id, created_at, updated_at")
+    .eq("user_id", userId)
+
+  if (emptyChats) {
+    const idsToDelete = emptyChats
+      .filter(c => c.created_at === c.updated_at && c.id !== excludeChatId)
+      .map(c => c.id)
+    
+    if (idsToDelete.length > 0) {
+      await supabase.from("analytics_assistant_chats").delete().in("id", idsToDelete)
+    }
+  }
 }
 
 async function getChat(userId: string, chatId: string): Promise<DbChat | null> {
@@ -305,6 +337,9 @@ export async function GET(request: NextRequest) {
     const chatId = request.nextUrl.searchParams.get("chatId") || undefined
     const workspace = await buildAnalyticsWorkspace(user)
     const chat = chatId ? await getChat(user.id, chatId) : await getLatestChat(user.id)
+    
+    await cleanupEmptyChats(user.id, chat?.id)
+    
     const chats = await serializeChats(user.id)
     const messages = chat ? await listMessages(chat.id) : []
 
@@ -343,6 +378,8 @@ export async function POST(request: NextRequest) {
 
     if (mode === "new_chat" || mode === "refresh") {
       const chat = (await createChat(user.id, workspace)) || (await getLatestChat(user.id))
+      
+      await cleanupEmptyChats(user.id, chat?.id)
       const chats = await serializeChats(user.id)
 
       return NextResponse.json({
@@ -491,5 +528,30 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("SleekCRM assistant error:", error)
     return NextResponse.json({ error: "SleekCRM assistant failed to respond" }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const user = await getCurrentUser(request)
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const chatId = request.nextUrl.searchParams.get("chatId")
+    if (!chatId) {
+      return NextResponse.json({ error: "chatId required" }, { status: 400 })
+    }
+
+    await supabase
+      .from("analytics_assistant_chats")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("id", chatId)
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    console.error("Assistant DELETE error:", error)
+    return NextResponse.json({ error: "Failed to delete chat" }, { status: 500 })
   }
 }
