@@ -165,7 +165,7 @@ export default function HomePage() {
               transition={{ duration: 0.6, delay: 0.1 }}
               className="max-w-xl text-base leading-8 text-white/70 sm:text-lg"
             >
-              A minimalistic, free, and easy-to-use customer relationship management platform for businesses of all sizes.
+              A minimalistic, free, and easy-to-use customer relationship management platform for businesses and nonprofits of all sizes.
             </motion.p>
 
             <motion.div

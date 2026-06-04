@@ -11,7 +11,7 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "SleekCRM - Customer Relationships, Simplified",
   description:
-    "A minimalistic, free, and easy-to-use customer relationship management platform for businesses of all sizes.",
+    "A minimalistic, free, and easy-to-use customer relationship management platform for businesses and nonprofits of all sizes.",
   icons: {
     icon: "icon.png"
   }
