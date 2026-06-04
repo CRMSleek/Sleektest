@@ -1,13 +1,31 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { motion } from "framer-motion"
-import { Bot, Download, RefreshCw, Sparkles, Wand2, Mail, FileText, Users } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import {
+  ArrowUpRight,
+  Bot,
+  CheckCircle2,
+  Download,
+  FileText,
+  Mail,
+  Paperclip,
+  Plus,
+  RefreshCw,
+  Send,
+  Sparkles,
+  Users,
+  Wand2,
+  MessageSquareText,
+  X,
+  MessageSquare,
+  Clock,
+} from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 type MetricWithChange = {
@@ -39,27 +57,69 @@ type AnalyticsData = {
   }>
 }
 
-type TaskKey = "email" | "survey" | "customers" | "export"
+type TaskKey = "survey" | "email" | "customers" | "export"
 
 type AgentMessage = {
   id: string
   role: "assistant" | "user"
   content: string
+  attachments?: UploadedFile[]
+}
+
+type ChatItem = {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+type TaskItem = {
+  key: TaskKey
+  priority: number
+  title: string
+  summary: string
+  detail: string
+  prompt: string
+  icon: LucideIcon
+}
+
+type AssistantResponse = {
+  reply?: string
+  messages?: Array<{ id: string; role: "assistant" | "user"; content: string }>
+  workspace?: AnalyticsData
+  chats?: ChatItem[]
+  activeChatId?: string
+  chat?: ChatItem
+  error?: string
+}
+
+type UploadedFile = {
+  id: string
+  name: string
+  size: number
+  type: string
+  dataUrl: string
 }
 
 const WELCOME: AgentMessage = {
   id: "welcome",
   role: "assistant",
-  content: "Let's get to work today!",
+  content: "Pick a task, then run it.",
 }
 
 const fadeUp = {
-  hidden: { opacity: 0, y: 28 },
+  hidden: { opacity: 0, y: 24 },
   visible: (i: number) => ({
     opacity: 1,
     y: 0,
-    transition: { delay: i * 0.06, duration: 0.35 },
+    transition: { delay: i * 0.05, duration: 0.35 },
   }),
+}
+
+const modalVariants = {
+  hidden: { opacity: 0, scale: 0.95, y: -8 },
+  visible: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.2, ease: "easeOut" } },
+  exit: { opacity: 0, scale: 0.95, y: -8, transition: { duration: 0.15, ease: "easeIn" } },
 }
 
 function csvEscape(value: unknown) {
@@ -116,66 +176,299 @@ function buildPlaceholderRows(data: AnalyticsData | null) {
   return rows
 }
 
-function deriveSuggestion(
-  data: AnalyticsData | null,
-): Array<{ title: string; description: string; icon: LucideIcon; task: TaskKey }> {
+function deriveTasks(data: AnalyticsData | null): TaskItem[] {
   const totalResponses = data?.metrics?.totalResponses?.value ?? 0
   const avgSatisfaction = data?.metrics?.avgSatisfaction?.value ?? 0
   const activeCustomers = data?.metrics?.activeCustomers?.value ?? 0
+  const totalSurveys = data?.metrics?.totalSurveys?.value ?? 0
   const hasRecentActivity = (data?.recentActivity || []).length > 0
+  const hasCustomerBase = activeCustomers > 0
 
-  const suggestions = [
+  const tasks: TaskItem[] = [
     {
-      title: totalResponses === 0 ? "Create a customer feedback survey" : "Refresh customer follow-up",
-      description:
+      key: "survey",
+      priority: totalResponses === 0 ? 1 : totalResponses < 10 ? 2 : 4,
+      title: totalSurveys === 0 ? "Create first customer survey" : "Tighten survey feedback loop",
+      summary:
         totalResponses === 0
-          ? "There is no response volume yet. Start with a short survey to create a baseline."
-          : "Recent responses exist, so the next best move is usually a follow-up email or a tighter survey.",
+          ? "No response volume yet. Start with a short survey."
+          : "Survey activity exists. Use the next run to narrow the gap.",
+      detail:
+        totalResponses === 0
+          ? "Build a short survey with three focused questions so the agent can collect a baseline."
+          : "Review the current survey flow and run a tighter version that targets the biggest response gap.",
+      prompt:
+        totalResponses === 0
+          ? "Create a short customer survey with three questions that surfaces the biggest friction in the current workspace."
+          : "Refine the current survey strategy and propose the smallest change that will improve response quality.",
       icon: FileText,
-      task: "survey" as TaskKey,
     },
     {
-      title: avgSatisfaction < 4 ? "Draft a re-engagement email" : "Segment your best customers",
-      description:
+      key: "email",
+      priority: avgSatisfaction < 4 ? 1 : 3,
+      title: avgSatisfaction < 4 ? "Draft a re-engagement email" : "Segment follow-up email",
+      summary:
         avgSatisfaction < 4
-          ? "The satisfaction signal suggests it is time to ask what needs to change."
-          : "The satisfaction trend looks healthy, so segmenting the strongest customers is the next leverage point.",
+          ? "The satisfaction signal is weak. Send a direct follow-up."
+          : "Satisfaction looks stable. Use email to keep the strongest accounts moving.",
+      detail:
+        avgSatisfaction < 4
+          ? "The agent should draft a message that asks what changed and what needs to be fixed first."
+          : "The agent should draft a targeted follow-up for the best customer segment in the workspace.",
+      prompt:
+        avgSatisfaction < 4
+          ? "Draft a concise re-engagement email for customers with recent low satisfaction signals."
+          : "Draft a segmented follow-up email for customers who look most ready for a next step.",
       icon: Mail,
-      task: "email" as TaskKey,
     },
     {
-      title: activeCustomers > 0 ? "Review relationship coverage" : "Import customer records",
-      description:
-        activeCustomers > 0
-          ? "There are active customers in the workspace, so you can tighten relationships and next steps."
-          : "The workspace is empty or sparse, so the first win is to load customer data.",
+      key: "customers",
+      priority: hasCustomerBase ? 2 : 5,
+      title: hasCustomerBase ? "Review customer coverage" : "Load customer records",
+      summary:
+        hasCustomerBase
+          ? "There are active customers to inspect. Tighten relationships and next steps."
+          : "The workspace is sparse. The first job is to get customer data in place.",
+      detail:
+        hasCustomerBase
+          ? "Open the customer coverage task and ask the agent where relationships are thin or stale."
+          : "Ask the agent to identify the smallest customer import or cleanup that will unblock the workspace.",
+      prompt:
+        hasCustomerBase
+          ? "Review customer relationships and identify the accounts that need attention first."
+          : "Identify the smallest customer data cleanup needed to make the workspace useful.",
       icon: Users,
-      task: "customers" as TaskKey,
     },
     {
-      title: hasRecentActivity ? "Export the current workspace" : "Prepare for data export",
-      description:
+      key: "export",
+      priority: hasRecentActivity ? 4 : 6,
+      title: "Export current workspace",
+      summary: hasRecentActivity ? "Export once, from one place." : "One CSV export is enough for handoff.",
+      detail:
         hasRecentActivity
-          ? "Technical users can export the current workspace as CSV and take it offline."
-          : "Once data lands, CSV export will give technical users a quick handoff format.",
+          ? "Use this task when you need the current workspace in CSV form for review or handoff."
+          : "This stays available, but it should not repeat across the panel.",
+      prompt: "Export the current workspace as CSV.",
       icon: Download,
-      task: "export" as TaskKey,
     },
   ]
 
-  return suggestions
+  return tasks.sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title))
 }
 
+function formatChatLabel(chat: ChatItem) {
+  return chat.title || "Insight chat"
+}
+
+function formatChatTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ─── Chat History Modal ────────────────────────────────────────────────────────
+function ChatHistoryModal({
+  open,
+  onClose,
+  chats,
+  activeChatId,
+  loading,
+  sending,
+  onOpenChat,
+  onNewChat,
+}: {
+  open: boolean
+  onClose: () => void
+  chats: ChatItem[]
+  activeChatId: string | null
+  loading: boolean
+  sending: boolean
+  onOpenChat: (id: string) => void
+  onNewChat: () => void
+}) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+            onClick={onClose}
+          />
+
+          {/* Modal panel */}
+          <motion.div
+            variants={modalVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-primary/20 bg-background/98 shadow-2xl backdrop-blur-xl"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-primary/10 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                <p className="font-semibold text-sm">Chat History</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onNewChat}
+                  disabled={loading || sending}
+                  className="h-7 gap-1.5 rounded-full px-3 text-xs"
+                >
+                  <Plus className="h-3 w-3" />
+                  New chat
+                </Button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/10 bg-background/80 text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* List */}
+            <ScrollArea className="max-h-80">
+              <div className="space-y-1.5 p-3">
+                {chats.length > 0 ? (
+                  chats.map((chat) => {
+                    const active = chat.id === activeChatId
+                    return (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        onClick={() => {
+                          onOpenChat(chat.id)
+                          onClose()
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                          active
+                            ? "border-primary/30 bg-primary/8"
+                            : "border-primary/10 bg-background hover:bg-muted/50"
+                        }`}
+                      >
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                          <MessageSquare className="h-3.5 w-3.5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{formatChatLabel(chat)}</p>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <Clock className="h-3 w-3 text-muted-foreground" />
+                            <p className="text-xs text-muted-foreground">{formatChatTime(chat.updated_at)}</p>
+                          </div>
+                        </div>
+                        {active && <Badge variant="secondary" className="shrink-0 text-xs">Current</Badge>}
+                      </button>
+                    )
+                  })
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-8 text-center">
+                    <MessageSquare className="h-8 w-8 text-muted-foreground/40" />
+                    <p className="text-sm text-muted-foreground">No previous chats yet.</p>
+                    <p className="text-xs text-muted-foreground/60">Start a new chat to get going.</p>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  )
+}
+
+// ─── Main Component ────────────────────────────────────────────────────────────
 export function AnalyticsAgentTab() {
   const [hasGenerated, setHasGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([WELCOME])
+  const [chats, setChats] = useState<ChatItem[]>([])
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [selectedTask, setSelectedTask] = useState<TaskKey | null>(null)
+  const [completedTasks, setCompletedTasks] = useState<Record<TaskKey, boolean>>({
+    survey: false,
+    email: false,
+    customers: false,
+    export: false,
+  })
   const [input, setInput] = useState("")
+  const [sending, setSending] = useState(false)
+  const [status, setStatus] = useState("")
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false)
+  const [attachments, setAttachments] = useState<UploadedFile[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const suggestions = useMemo(() => deriveSuggestion(data), [data])
+  // ─── Draggable divider state ────────────────────────────────────────────────
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [leftWidthPct, setLeftWidthPct] = useState(42) // percent
+  const isDragging = useRef(false)
+  const dragStartX = useRef(0)
+  const dragStartPct = useRef(0)
 
+  const tasks = useMemo(() => deriveTasks(data), [data])
+  const activeTask = tasks.find((task) => task.key === selectedTask) || tasks[0]
+  const activeChat = chats.find((chat) => chat.id === activeChatId) || null
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
+
+  // ─── Drag handlers ──────────────────────────────────────────────────────────
+  const onDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isDragging.current = true
+    dragStartX.current = e.clientX
+    dragStartPct.current = leftWidthPct
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+  }, [leftWidthPct])
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current || !containerRef.current) return
+      const containerWidth = containerRef.current.offsetWidth
+      const delta = e.clientX - dragStartX.current
+      const deltaPct = (delta / containerWidth) * 100
+      const newPct = Math.min(70, Math.max(20, dragStartPct.current + deltaPct))
+      setLeftWidthPct(newPct)
+    }
+    const onMouseUp = () => {
+      if (!isDragging.current) return
+      isDragging.current = false
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+    }
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove)
+      window.removeEventListener("mouseup", onMouseUp)
+    }
+  }, [])
+
+  // ─── Data loading ───────────────────────────────────────────────────────────
   const loadAnalytics = async () => {
     setLoading(true)
     try {
@@ -183,10 +476,7 @@ export function AnalyticsAgentTab() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
-      if (!response.ok) {
-        throw new Error("Failed to load analytics data")
-      }
-
+      if (!response.ok) throw new Error("Failed to load analytics data")
       const json = (await response.json()) as AnalyticsData
       setData(json)
     } catch (error) {
@@ -197,256 +487,561 @@ export function AnalyticsAgentTab() {
     }
   }
 
+  const loadChat = async (chatId?: string) => {
+    try {
+      const url = chatId ? `/api/analytics/assistant?chatId=${encodeURIComponent(chatId)}` : "/api/analytics/assistant"
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      const json = (await response.json()) as {
+        messages?: Array<{ id: string; role: "assistant" | "user"; content: string }>
+        chats?: ChatItem[]
+        activeChatId?: string
+        workspace?: AnalyticsData
+        error?: string
+      }
+
+      if (!response.ok) throw new Error(json.error || "Failed to load chat")
+
+      setData((prev) => json.workspace || prev)
+      setChats(json.chats || [])
+      setActiveChatId(json.activeChatId || chatId || null)
+
+      const history = (json.messages || []).map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+      }))
+
+      setMessages(history.length > 0 ? history : [WELCOME])
+      return json.activeChatId || chatId || null
+    } catch (error) {
+      console.error("Chat load failed:", error)
+      setMessages([WELCOME])
+      setChats([])
+      setActiveChatId(null)
+      return null
+    }
+  }
+
   useEffect(() => {
     void loadAnalytics()
   }, [])
 
-  const activateAgent = () => {
+  const activateAgent = async () => {
     setHasGenerated(true)
-    setMessages([
-      WELCOME,
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "I have loaded the workspace. Choose a task, export the data, or type a request in the panel.",
-      },
-    ])
-  }
+    setStatus("Creating new chat...")
+    try {
+      const response = await fetch("/api/analytics/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "new_chat" }),
+      })
+      const json = (await response.json()) as AssistantResponse
 
-  const queueTask = (task: TaskKey) => {
-    setSelectedTask(task)
-    const taskMessageMap: Record<TaskKey, string> = {
-      email: "Queued a placeholder email workflow. API wiring will come next.",
-      survey: "Queued a placeholder survey workflow. We can attach a draft builder next.",
-      customers: "Queued a placeholder customer review workflow.",
-      export: "Prepared the CSV export path for the current workspace.",
+      if (!response.ok) throw new Error(json.error || "Failed to generate insights")
+
+      setData(json.workspace || null)
+      setChats(json.chats || [])
+      setActiveChatId(json.activeChatId || json.chat?.id || null)
+      setMessages([WELCOME])
+      setSelectedTask(tasks[0]?.key || null)
+      setStatus("")
+      await loadChat(json.activeChatId || json.chat?.id || undefined)
+    } catch (error) {
+      console.error("Generate insights failed:", error)
+      setStatus("Could not create a new chat.")
     }
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        content:
-          task === "email"
-            ? "Help me draft a follow-up email."
-            : task === "survey"
-              ? "Help me create a survey."
-              : task === "customers"
-                ? "Show me the customer workflow."
-                : "Export everything as CSV.",
-      },
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: taskMessageMap[task],
-      },
-    ])
   }
 
-  const handleSubmit = () => {
-    const trimmed = input.trim()
-    if (!trimmed) return
-
-    setHasGenerated(true)
-    setMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), role: "user", content: trimmed },
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content:
-          "Placeholder agent response: this request is queued for the next API pass. For now, use the task buttons or export the CSV snapshot.",
-      },
-    ])
-    setInput("")
+  const selectTask = (task: TaskKey) => {
+    setSelectedTask(task)
   }
 
   const exportAll = () => {
     const rows = buildPlaceholderRows(data)
     downloadCsv("analytics-export.csv", rows)
+    setCompletedTasks((prev) => ({ ...prev, export: true }))
+    setStatus("CSV exported.")
   }
 
+  // ─── File upload ─────────────────────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    files.forEach((file) => {
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            dataUrl,
+          },
+        ])
+      }
+      reader.readAsDataURL(file)
+    })
+    // Reset the input so the same file can be re-uploaded
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((f) => f.id !== id))
+  }
+
+  // ─── Chat sending ─────────────────────────────────────────────────────────────
+  const sendChat = async (content: string) => {
+    const trimmed = content.trim()
+    if ((!trimmed && attachments.length === 0) || sending) return
+
+    if (!hasGenerated) setHasGenerated(true)
+
+    const optimisticUserMessage: AgentMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmed || (attachments.length > 0 ? `[Attached ${attachments.length} file(s)]` : ""),
+      attachments: attachments.length > 0 ? [...attachments] : undefined,
+    }
+
+    setSending(true)
+    setStatus("Thinking...")
+    setMessages((prev) => [...prev, optimisticUserMessage])
+    setInput("")
+    setAttachments([])
+
+    try {
+      const response = await fetch("/api/analytics/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: trimmed,
+          mode: "chat",
+          chatId: activeChatId,
+          attachments: optimisticUserMessage.attachments?.map((f) => ({
+            name: f.name,
+            type: f.type,
+            size: f.size,
+          })),
+        }),
+      })
+
+      const json = (await response.json()) as AssistantResponse
+
+      if (!response.ok) throw new Error(json.error || "Failed to send message")
+
+      setData(json.workspace || null)
+      setChats(json.chats || [])
+      setActiveChatId(json.activeChatId || activeChatId)
+
+      if (Array.isArray(json.messages) && json.messages.length > 0) {
+        setMessages(
+          json.messages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+          })),
+        )
+      } else if (json.reply) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: json.reply ?? "Response received.",
+          },
+        ])
+      }
+
+      setStatus("")
+    } catch (error) {
+      console.error("Assistant send failed:", error)
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "The assistant could not respond just now. Check the model connection and try again.",
+        },
+      ])
+      setStatus("Connection issue")
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const runTask = async (task: TaskItem) => {
+    if (sending) return
+    if (task.key === "export") {
+      exportAll()
+      return
+    }
+    await sendChat(task.prompt)
+    setCompletedTasks((prev) => ({ ...prev, [task.key]: true }))
+  }
+
+  const openChat = async (chatId: string) => {
+    setStatus("Loading chat...")
+    const id = await loadChat(chatId)
+    setActiveChatId(id)
+    setStatus("")
+  }
+
+  // ─── Welcome screen ───────────────────────────────────────────────────────────
   if (!hasGenerated) {
     return (
-      <Card className="h-full rounded-none border-0 border-dashed border-primary/20 bg-gradient-to-br from-background via-background to-muted/30">
-        <CardContent className="flex h-screen flex-col items-center justify-center gap-6 p-10 text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full border bg-background shadow-sm">
-            <Sparkles className="h-7 w-7 text-primary" />
-          </div>
-          <div className="max-w-2xl space-y-2">
-            <h2 className="text-3xl font-semibold tracking-tight">Let's get to work today!</h2>
-            <p className="text-muted-foreground">
-              Start the agent workspace when you are ready. It will surface a working set of tasks, placeholder actions, and CSV export tools for technical users.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <Button onClick={activateAgent} disabled={loading}>
+      <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-background">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.16),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(168,85,247,0.12),transparent_28%),linear-gradient(180deg,rgba(2,6,23,0.98),rgba(3,7,18,1))]" />
+        <Card className="relative z-10 mx-4 w-full max-w-2xl rounded-3xl border-white/10 bg-black/35 p-3 shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <CardContent className="flex flex-col items-center gap-4 px-6 py-10 text-center md:px-10">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+              <Sparkles className="h-6 w-6 text-cyan-300" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">Generate insights</h2>
+              <p className="text-sm leading-6 text-white/60">Open a new chat, then work through the task checklist.</p>
+            </div>
+            <Button onClick={activateAgent} disabled={loading} size="lg" className="rounded-full px-6">
               <Wand2 className="mr-2 h-4 w-4" />
               {loading ? "Loading..." : "Generate insights"}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+            {status ? <p className="text-xs text-white/45">{status}</p> : null}
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
+  // ─── Main layout ──────────────────────────────────────────────────────────────
   return (
-    <div className="grid h-full min-h-screen gap-0 xl:grid-cols-[minmax(0,1fr)_380px]">
-      <div className="space-y-0">
-        <motion.div initial="hidden" animate="visible" variants={fadeUp} custom={0}>
-          <Card className="h-full rounded-none border-0 border-r border-primary/10 bg-gradient-to-br from-background via-background to-muted/20">
-            <CardHeader className="space-y-2 px-6 pt-6">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary" className="gap-1">
-                  <Bot className="h-3.5 w-3.5" />
-                  Agent workspace active
-                </Badge>
-                <Badge variant="outline">{selectedTask ? `Selected: ${selectedTask}` : "Choose a task"}</Badge>
-              </div>
-              <CardTitle className="text-2xl">Today's workspace</CardTitle>
-              <CardDescription className="max-w-2xl">
-                Pick a task to shape the next step, or export the current workspace as CSV for a technical handoff.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4 px-6 pb-6 lg:grid-cols-2">
-              {suggestions.map((suggestion, index) => {
-                const Icon = suggestion.icon
+    <>
+      {/* Chat History Modal */}
+      <ChatHistoryModal
+        open={chatHistoryOpen}
+        onClose={() => setChatHistoryOpen(false)}
+        chats={chats}
+        activeChatId={activeChatId}
+        loading={loading}
+        sending={sending}
+        onOpenChat={openChat}
+        onNewChat={() => {
+          setChatHistoryOpen(false)
+          void activateAgent()
+        }}
+      />
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileSelect}
+        accept="*/*"
+        id="agent-file-upload"
+      />
+
+      {/* Main two-panel container */}
+      <div
+        ref={containerRef}
+        className="flex h-[100dvh] min-h-0 overflow-hidden bg-background"
+      >
+        {/* ── Left panel: Task checklist ─────────────────────────────────────── */}
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={fadeUp}
+          custom={0}
+          style={{ width: `${leftWidthPct}%` }}
+          className="flex min-h-0 min-w-0 flex-col border-r border-primary/10 bg-gradient-to-br from-background via-background to-muted/20"
+        >
+          {/* Compact top bar */}
+          <div className="flex shrink-0 items-center justify-between border-b border-primary/10 bg-background/95 px-5 py-3 backdrop-blur">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="gap-1">
+                <Bot className="h-3.5 w-3.5" />
+                Agent active
+              </Badge>
+              <Badge variant="outline">{activeChat ? `${formatChatLabel(activeChat)}` : "Ready"}</Badge>
+            </div>
+            <Button variant="outline" size="sm" onClick={activateAgent} disabled={loading || sending} className="h-7 gap-1.5 rounded-full px-3 text-xs">
+              <Plus className="h-3 w-3" />
+              New chat
+            </Button>
+          </div>
+
+          {/* Task list */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5">
+            <div className="space-y-3">
+              {tasks.map((task, index) => {
+                const Icon = task.icon
+                const isSelected = selectedTask === task.key
+                const isComplete = completedTasks[task.key]
+
                 return (
-                  <motion.div key={suggestion.title} initial="hidden" animate="visible" variants={fadeUp} custom={index}>
-                    <Card className="h-full">
-                      <CardHeader>
-                        <div className="flex items-center gap-2">
-                          <div className="rounded-lg bg-primary/10 p-2 text-primary">
-                            <Icon className="h-4 w-4" />
+                  <motion.div key={task.key} initial="hidden" animate="visible" variants={fadeUp} custom={index}>
+                    <Card className={`rounded-xl border transition-colors ${isSelected ? "border-primary/30 bg-background" : "border-primary/10 bg-background/80"}`}>
+                      <CardHeader className="space-y-2 px-5 pt-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <div className="rounded-lg bg-primary/10 p-2 text-primary">
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <CardTitle className="text-base">{task.title}</CardTitle>
                           </div>
-                          <CardTitle className="text-base">{suggestion.title}</CardTitle>
+                          <Badge variant="outline">#{task.priority}</Badge>
                         </div>
-                        <CardDescription>{suggestion.description}</CardDescription>
+                        <CardDescription>{task.summary}</CardDescription>
                       </CardHeader>
-                      <CardContent className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" onClick={() => queueTask(suggestion.task)}>
-                          Queue task
-                        </Button>
-                        {index === 3 && (
-                          <Button size="sm" onClick={exportAll}>
-                            <Download className="mr-2 h-4 w-4" />
-                            Export CSV
+                      <CardContent className="space-y-3 px-5 pb-4">
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" onClick={() => selectTask(task.key)}>
+                            Complete task
                           </Button>
-                        )}
+                          {task.key === "export" ? (
+                            <Button size="sm" onClick={exportAll}>
+                              <Download className="mr-2 h-4 w-4" />
+                              Export CSV
+                            </Button>
+                          ) : null}
+                          {isComplete ? (
+                            <Badge variant="secondary" className="gap-1">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Complete
+                            </Badge>
+                          ) : null}
+                        </div>
+
+                        {isSelected ? (
+                          <div className="rounded-lg border bg-background/80 p-4">
+                            <p className="text-sm font-medium">Task details</p>
+                            <p className="mt-2 text-sm text-muted-foreground">{task.detail}</p>
+                            <div className="mt-4 flex flex-wrap items-center gap-2">
+                              <Button onClick={() => void runTask(task)} disabled={sending}>
+                                <ArrowUpRight className="mr-2 h-4 w-4" />
+                                Run
+                              </Button>
+                              <Badge variant="outline">Run the agent on this task</Badge>
+                            </div>
+                          </div>
+                        ) : null}
                       </CardContent>
                     </Card>
                   </motion.div>
                 )
               })}
-            </CardContent>
-          </Card>
-        </motion.div>
+            </div>
 
-        <motion.div initial="hidden" animate="visible" variants={fadeUp} custom={1}>
-          <Card className="rounded-none border-0 border-t">
-            <CardHeader className="px-6 pt-6">
-              <CardTitle>Workspace snapshot</CardTitle>
-              <CardDescription>Live dashboard data available to export right now.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3 px-6 pb-6 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-lg border p-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Responses</p>
-                <p className="mt-1 text-2xl font-semibold">{data?.metrics?.totalResponses?.value ?? 0}</p>
-              </div>
-              <div className="rounded-lg border p-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Survey opens</p>
-                <p className="mt-1 text-2xl font-semibold">{data?.metrics?.totalSurveyOpens?.value ?? 0}</p>
-              </div>
-              <div className="rounded-lg border p-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Customers</p>
-                <p className="mt-1 text-2xl font-semibold">{data?.metrics?.activeCustomers?.value ?? 0}</p>
-              </div>
-              <div className="rounded-lg border p-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Satisfaction</p>
-                <p className="mt-1 text-2xl font-semibold">{data?.metrics?.avgSatisfaction?.value?.toFixed(1) ?? "0.0"}/5</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
-
-      <motion.div initial="hidden" animate="visible" variants={fadeUp} custom={2} className="xl:sticky xl:top-6">
-        <Card className="h-full rounded-none border-0 border-l border-primary/10 bg-card/95 shadow-none backdrop-blur">
-          <CardHeader className="px-6 pt-6">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Sparkles className="h-4 w-4 text-primary" />
-              Agent Panel
-            </CardTitle>
-            <CardDescription>Placeholder agent interface for drafting tasks, queueing work, and exporting data.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex h-[calc(100vh-88px)] flex-col gap-4 px-6 pb-6">
-            <ScrollArea className="flex-1 rounded-none border bg-muted/30 p-3">
-              <div className="space-y-3">
-                {messages.map((message, index) => (
-                  <motion.div
-                    key={message.id}
-                    variants={fadeUp}
-                    initial="hidden"
-                    animate="visible"
-                    custom={index}
-                    className={`flex flex-col gap-2 ${message.role === "user" ? "items-end" : "items-start"}`}
-                  >
-                    <div
-                      className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm ${
-                        message.role === "user" ? "bg-primary text-primary-foreground" : "bg-background text-foreground"
-                      }`}
-                    >
-                      {message.content}
+            {/* Metrics strip */}
+            <motion.div initial="hidden" animate="visible" variants={fadeUp} custom={1} className="mt-5">
+              <Card className="rounded-xl border-primary/10 bg-transparent shadow-none">
+                <CardContent className="grid gap-3 px-0 py-4 sm:grid-cols-4">
+                  {[
+                    ["Responses", data?.metrics?.totalResponses?.value ?? 0],
+                    ["Opens", data?.metrics?.totalSurveyOpens?.value ?? 0],
+                    ["Customers", data?.metrics?.activeCustomers?.value ?? 0],
+                    ["Score", `${data?.metrics?.avgSatisfaction?.value?.toFixed(1) ?? "0.0"}/5`],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="rounded-lg border border-primary/10 bg-background/80 p-4">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+                      <p className="mt-1 text-xl font-semibold">{value}</p>
                     </div>
-                  </motion.div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            {status ? (
+              <div className="mt-2 flex items-start gap-2 rounded-lg border border-primary/10 bg-background/80 p-4 text-sm">
+                <MessageSquareText className="mt-0.5 h-4 w-4 text-primary" />
+                <p>{status}</p>
+              </div>
+            ) : null}
+          </div>
+        </motion.div>
+
+        {/* ── Draggable divider ─────────────────────────────────────────────── */}
+        <div
+          onMouseDown={onDividerMouseDown}
+          className="group relative z-10 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-primary/5 transition-colors hover:bg-primary/20"
+          title="Drag to resize"
+        >
+          {/* Visual drag handle pip */}
+          <div className="absolute flex h-10 w-3.5 flex-col items-center justify-center gap-0.5 rounded-full border border-primary/20 bg-background opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+            <span className="h-0.5 w-1.5 rounded-full bg-primary/60" />
+            <span className="h-0.5 w-1.5 rounded-full bg-primary/60" />
+            <span className="h-0.5 w-1.5 rounded-full bg-primary/60" />
+          </div>
+        </div>
+
+        {/* ── Right panel: Chat ─────────────────────────────────────────────── */}
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={fadeUp}
+          custom={2}
+          className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+        >
+          {/* Slim chat top bar */}
+          <div className="flex shrink-0 items-center justify-between border-b border-primary/10 bg-background/95 px-5 py-3 backdrop-blur">
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+              <p className="truncate text-sm font-semibold">
+                {activeChat ? formatChatLabel(activeChat) : "Current chat"}
+              </p>
+              <Badge variant="outline" className="shrink-0">{sending ? "Working" : "Ready"}</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Chat history button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setChatHistoryOpen(true)}
+                className="h-7 gap-1.5 rounded-full px-3 text-xs"
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                History
+                {chats.length > 0 && (
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                    {chats.length}
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void loadChat(activeChatId || undefined)}
+                disabled={loading || sending}
+                className="h-7 w-7 rounded-full p-0"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Messages area */}
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="space-y-4 px-5 py-5">
+              {messages.map((message, index) => (
+                <motion.div
+                  key={message.id}
+                  variants={fadeUp}
+                  initial="hidden"
+                  animate="visible"
+                  custom={index}
+                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "border border-primary/10 bg-background/95"
+                    }`}
+                  >
+                    {message.content}
+                    {/* Attachment previews */}
+                    {message.attachments && message.attachments.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {message.attachments.map((file) => (
+                          <div
+                            key={file.id}
+                            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs ${
+                              message.role === "user"
+                                ? "bg-primary-foreground/15 text-primary-foreground"
+                                : "border border-primary/10 bg-muted/50"
+                            }`}
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            <span className="max-w-[120px] truncate">{file.name}</span>
+                            <span className="opacity-60">({formatFileSize(file.size)})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+
+          {/* Input area */}
+          <div className="shrink-0 border-t border-primary/10 bg-background/98 p-4">
+            {/* Attachment preview strip */}
+            {attachments.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex items-center gap-1.5 rounded-lg border border-primary/15 bg-muted/50 px-2.5 py-1.5 text-xs"
+                  >
+                    <Paperclip className="h-3 w-3 text-primary" />
+                    <span className="max-w-[120px] truncate font-medium">{file.name}</span>
+                    <span className="text-muted-foreground">({formatFileSize(file.size)})</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(file.id)}
+                      className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
                 ))}
               </div>
-            </ScrollArea>
+            )}
 
-            <div className="space-y-2">
-              <Input
-                placeholder="Ask the agent to draft, export, or inspect..."
+            <div className="relative">
+              <Textarea
+                placeholder="Ask the agent anything, or run a task..."
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault()
-                    handleSubmit()
+                    void sendChat(input)
                   }
                 }}
+                className="min-h-[80px] resize-none rounded-2xl border-primary/15 bg-background/80 pb-12 pr-28"
               />
-              <div className="flex gap-2">
-                <Button className="flex-1" onClick={handleSubmit}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Send
-                </Button>
-                <Button variant="outline" onClick={exportAll}>
-                  <Download className="h-4 w-4" />
+
+              {/* Bottom toolbar inside textarea */}
+              <div className="absolute bottom-3 left-3 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/15 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+                  title="Attach file"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </button>
+                <span className="text-xs text-muted-foreground/60">Shift+Enter for newline</span>
+              </div>
+
+              {/* Send / Run button */}
+              <div className="absolute bottom-3 right-3">
+                <Button
+                  size="sm"
+                  className="h-7 gap-1.5 rounded-full px-3"
+                  onClick={() => void (input.trim() || attachments.length > 0 ? sendChat(input) : runTask(activeTask))}
+                  disabled={sending || (!input.trim() && attachments.length === 0 && !activeTask)}
+                >
+                  {sending ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
+                  {sending ? "Sending..." : input.trim() || attachments.length > 0 ? "Send" : "Run"}
                 </Button>
               </div>
             </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="secondary" size="sm" onClick={() => queueTask("survey")}>
-                <FileText className="mr-2 h-4 w-4" />
-                Survey
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => queueTask("email")}>
-                <Mail className="mr-2 h-4 w-4" />
-                Email
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => queueTask("customers")}>
-                <Users className="mr-2 h-4 w-4" />
-                Customers
-              </Button>
-              <Button variant="secondary" size="sm" onClick={exportAll}>
-                <Download className="mr-2 h-4 w-4" />
-                CSV
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
+          </div>
+        </motion.div>
+      </div>
+    </>
   )
 }
