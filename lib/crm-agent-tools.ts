@@ -1203,53 +1203,383 @@ export function formatAgentContext(context: CRMAgentContext | null) {
   return JSON.stringify(
     {
       snapshot: context.snapshot,
+      toolPolicy:
+        "Use MCP tools for record details. Do not rely on prompt-loaded raw rows. Updates are scoped to the authenticated user's Supabase records.",
+      availableTools: CRM_MCP_TOOLS.map((tool) => tool.name),
       analyses: context.analyses.map((analysis) => ({
         type: analysis.type,
         cached: analysis.cached,
         description: analysis.description,
         createdAt: analysis.createdAt,
-        result: analysis.result,
-        evidence: analysis.evidence,
+        summary: summarizeAnalysisForPrompt(analysis),
+        evidence: analysis.evidence.slice(0, 4),
       })),
       proposedActions: context.proposals,
-      recentCustomers: context.customers.map((customer: any) => ({
-        id: customer.id,
-        name: customer.name,
-        email: customer.email,
-        relationshipType: customer.relationship_type,
-        notes: customer.notes,
-      })),
-      recentResponses: context.responses.map((response: any) => ({
-        id: response.id,
-        customerName: response.customer_name,
-        customerEmail: response.customer_email,
-        submittedAt: response.submitted_at,
-        answers: response.answers,
-      })),
-      recentEmails: context.emails.map((email: any) => ({
-        id: email.id,
-        sender: email.sender_email,
-        subject: email.subject,
-        date: email.date,
-        content: safeText(email.content_text).slice(0, 500),
-      })),
+      statuses: context.statuses,
     },
     null,
     2,
   )
 }
 
+function summarizeAnalysisForPrompt(analysis: CRMAnalysisResult) {
+  const result = analysis.result || {}
+  if (analysis.type === "sentiment") {
+    return {
+      averageScore: result.averageScore,
+      negativeCount: result.negativeCount,
+      positiveCount: result.positiveCount,
+      neutralCount: result.neutralCount,
+    }
+  }
+  if (analysis.type === "themes") return { topThemes: result.topThemes?.slice?.(0, 5), documentCount: result.documentCount }
+  if (analysis.type === "pain_points") return { painPoints: result.painPoints?.slice?.(0, 5), totalPainMentions: result.totalPainMentions }
+  if (analysis.type === "trends") return { risingThemes: result.risingThemes?.slice?.(0, 5), fallingThemes: result.fallingThemes?.slice?.(0, 5) }
+  if (analysis.type === "churn_risk") return { atRiskCustomers: result.atRiskCustomers?.slice?.(0, 8), atRiskCount: result.atRiskCount }
+  if (analysis.type === "health_scores") return { scores: result.scores?.slice?.(0, 8), averageHealth: result.averageHealth }
+  if (analysis.type === "feature_requests") return { featureClusters: result.featureClusters?.slice?.(0, 5), requestCount: result.requestCount }
+  if (analysis.type === "opportunities") return { opportunities: result.opportunities?.slice?.(0, 8), opportunityCount: result.opportunityCount }
+  return result
+}
+
+type CRMEntity = "customers" | "surveys" | "survey_responses" | "emails" | "crm_agent_tasks"
+
+const CRM_SCHEMA: Record<CRMEntity, { scope: "business" | "user"; readable: string[]; writable: string[] }> = {
+  customers: {
+    scope: "business",
+    readable: ["id", "name", "email", "phone", "location", "age", "notes", "relationship_type", "data", "created_at", "updated_at"],
+    writable: ["name", "email", "phone", "location", "age", "notes", "relationship_type", "data", "updated_at"],
+  },
+  surveys: {
+    scope: "user",
+    readable: ["id", "title", "description", "questions", "is_active", "times_opened", "created_at", "updated_at"],
+    writable: ["title", "description", "questions", "is_active", "updated_at"],
+  },
+  survey_responses: {
+    scope: "business",
+    readable: ["id", "survey_id", "customer_id", "customer_email", "customer_name", "answers", "submitted_at"],
+    writable: ["customer_email", "customer_name", "answers"],
+  },
+  emails: {
+    scope: "user",
+    readable: ["id", "gmail_message_id", "thread_id", "sender_name", "sender_email", "recipient_to", "recipient_cc", "recipient_bcc", "subject", "date", "content_text", "created_at", "updated_at"],
+    writable: ["sender_name", "sender_email", "recipient_to", "recipient_cc", "recipient_bcc", "subject", "date", "content_text", "content_html", "updated_at"],
+  },
+  crm_agent_tasks: {
+    scope: "user",
+    readable: ["id", "title", "description", "status", "priority", "reasoning", "evidence", "metadata", "created_at", "updated_at"],
+    writable: ["title", "description", "status", "priority", "reasoning", "evidence", "metadata", "updated_at"],
+  },
+}
+
+function assertCRMEntity(entity: unknown): CRMEntity {
+  if (typeof entity === "string" && entity in CRM_SCHEMA) return entity as CRMEntity
+  throw new Error("Unsupported CRM entity")
+}
+
+function scopedQuery(user: UserContext, entity: CRMEntity, query: any) {
+  if (CRM_SCHEMA[entity].scope === "business") {
+    const businessId = user.business?.id
+    if (!businessId) throw new Error("Business scope missing")
+    return query.eq("business_id", businessId)
+  }
+  return query.eq("user_id", user.id)
+}
+
+function cleanImportValue(value: unknown) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : value == null ? "" : String(value).replace(/\s+/g, " ").trim()
+}
+
+function pickImportValue(row: Record<string, any>, keys: string[]) {
+  const normalized = Object.fromEntries(Object.entries(row).map(([key, value]) => [key.toLowerCase().replace(/[\s_-]+/g, ""), value]))
+  for (const key of keys) {
+    const value = normalized[key.toLowerCase().replace(/[\s_-]+/g, "")]
+    if (value != null && cleanImportValue(value)) return cleanImportValue(value)
+  }
+  return ""
+}
+
+function normalizeEmail(value: unknown) {
+  return cleanImportValue(value).toLowerCase()
+}
+
+const CUSTOMER_TYPES = new Set(["customer", "lead", "partner", "vendor", "supplier", "contractor", "affiliate", "at-risk", "other"])
+
+function rowKind(row: Record<string, any>) {
+  const explicit = pickImportValue(row, ["type", "record_type", "kind"]).toLowerCase()
+  if (explicit.includes("email")) return "email"
+  if (explicit.includes("customer") || explicit.includes("contact") || explicit.includes("lead")) return "customer"
+  if (pickImportValue(row, ["subject", "from", "from_email", "sender", "sender_email", "body", "content", "message"])) return "email"
+  return "customer"
+}
+
+function rowToCustomer(row: Record<string, any>) {
+  const email = normalizeEmail(pickImportValue(row, ["email", "customer_email", "contact_email", "work_email"]))
+  const name = pickImportValue(row, ["name", "customer_name", "contact_name", "full_name", "company"])
+  if (!email && !name) return null
+  const relationship = pickImportValue(row, ["relationship_type", "relationship", "type", "status"]).toLowerCase()
+  const age = Number(pickImportValue(row, ["age"]))
+  return {
+    name: name || email || "Imported customer",
+    email,
+    phone: pickImportValue(row, ["phone", "phone_number", "mobile"]),
+    location: pickImportValue(row, ["location", "city", "address", "region"]),
+    age: Number.isFinite(age) && age > 0 ? age : undefined,
+    notes: pickImportValue(row, ["notes", "note", "description", "summary"]),
+    relationship_type: CUSTOMER_TYPES.has(relationship) ? relationship : "customer",
+    data: row,
+  }
+}
+
+function rowToEmail(row: Record<string, any>): any | null {
+  const fromEmail = normalizeEmail(pickImportValue(row, ["from_email", "sender_email", "email", "from"]))
+  const subject = pickImportValue(row, ["subject", "title"])
+  const body = pickImportValue(row, ["body", "content", "message", "content_text", "text", "notes"])
+  if (!fromEmail && !subject && !body) return null
+  return {
+    id: pickImportValue(row, ["id", "message_id", "gmail_message_id"]) || `import-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    threadId: pickImportValue(row, ["thread_id", "threadId"]) || null,
+    from: pickImportValue(row, ["from", "sender", "from_name", "sender_name"]) || fromEmail,
+    fromEmail,
+    fromName: pickImportValue(row, ["from_name", "sender_name", "name"]),
+    to: pickImportValue(row, ["to", "recipient", "recipient_to"]),
+    cc: pickImportValue(row, ["cc", "recipient_cc"]),
+    bcc: pickImportValue(row, ["bcc", "recipient_bcc"]),
+    subject,
+    dateFull: pickImportValue(row, ["date", "sent_at", "created_at", "timestamp"]) || new Date().toISOString(),
+    contentText: body,
+    html: pickImportValue(row, ["html", "content_html"]),
+    content: body,
+  }
+}
+
+async function upsertImportedCustomers(user: UserContext, rows: Record<string, any>[]) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+
+  let created = 0
+  let updated = 0
+  const errors: string[] = []
+  for (const row of rows) {
+    const customer = rowToCustomer(row)
+    if (!customer) continue
+    try {
+      const email = normalizeEmail(customer.email)
+      let lookup: any = supabase.from("customers").select("id").eq("business_id", businessId)
+      lookup = email ? lookup.eq("email", email) : lookup.eq("name", customer.name)
+      const { data: existing } = await lookup.maybeSingle()
+      const payload = {
+        business_id: businessId,
+        name: customer.name,
+        email: email || null,
+        phone: customer.phone || null,
+        location: customer.location || null,
+        age: customer.age || null,
+        notes: customer.notes || null,
+        relationship_type: customer.relationship_type || "customer",
+        data: customer.data,
+        updated_at: new Date().toISOString(),
+      }
+      if (existing?.id) {
+        const { error } = await supabase.from("customers").update(payload).eq("id", existing.id).eq("business_id", businessId)
+        if (error) throw error
+        updated += 1
+      } else {
+        const { error } = await supabase.from("customers").insert(payload)
+        if (error) throw error
+        created += 1
+      }
+    } catch (error: any) {
+      errors.push(error?.message || "Customer import failed")
+    }
+  }
+  return { created, updated, errors }
+}
+
+async function importRowsToCRM(user: UserContext, rows: Record<string, any>[]) {
+  const safeRows = rows.slice(0, 1000)
+  const customerRows = safeRows.filter((row) => rowKind(row) === "customer")
+  const emailRows = safeRows.filter((row) => rowKind(row) === "email")
+  const customerResult = await upsertImportedCustomers(user, customerRows)
+  const emails = emailRows.map(rowToEmail).filter(Boolean)
+  const emailResult = await saveEmailsForAnalysis(user, emails)
+  return { rows: safeRows.length, customers: customerResult, emails: emailResult }
+}
+
+function selectedFields(entity: CRMEntity, fields?: unknown) {
+  const readable = CRM_SCHEMA[entity].readable
+  if (!Array.isArray(fields) || fields.length === 0) return readable.join(", ")
+  const selected = fields.map((field) => String(field)).filter((field) => readable.includes(field))
+  return (selected.length ? selected : readable).join(", ")
+}
+
+async function queryCRMRecords(user: UserContext, args: Record<string, any>) {
+  const entity = assertCRMEntity(args.entity)
+  const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100)
+  let query: any = supabase.from(entity).select(selectedFields(entity, args.fields))
+  query = scopedQuery(user, entity, query)
+
+  const filters = args.filters && typeof args.filters === "object" ? args.filters : {}
+  for (const [key, value] of Object.entries(filters)) {
+    if (CRM_SCHEMA[entity].readable.includes(key) && value !== undefined && value !== null && value !== "") {
+      query = query.eq(key, value)
+    }
+  }
+
+  const search = safeText(args.search)
+  if (search) {
+    const term = search.replace(/[%(),]/g, " ").trim()
+    if (term) {
+      if (entity === "customers") query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,notes.ilike.%${term}%,location.ilike.%${term}%`)
+      if (entity === "emails") query = query.or(`sender_email.ilike.%${term}%,sender_name.ilike.%${term}%,subject.ilike.%${term}%,content_text.ilike.%${term}%`)
+      if (entity === "surveys") query = query.or(`title.ilike.%${term}%,description.ilike.%${term}%`)
+      if (entity === "survey_responses") query = query.or(`customer_email.ilike.%${term}%,customer_name.ilike.%${term}%`)
+      if (entity === "crm_agent_tasks") query = query.or(`title.ilike.%${term}%,description.ilike.%${term}%,reasoning.ilike.%${term}%`)
+    }
+  }
+
+  const orderBy = CRM_SCHEMA[entity].readable.includes("updated_at") ? "updated_at" : CRM_SCHEMA[entity].readable.includes("submitted_at") ? "submitted_at" : "created_at"
+  const { data, error } = await query.order(orderBy, { ascending: false }).limit(limit)
+  if (error) throw error
+  return { entity, count: data?.length || 0, records: data || [] }
+}
+
+function cleanUpdatePayload(entity: CRMEntity, updates: Record<string, any>) {
+  const writable = CRM_SCHEMA[entity].writable
+  const payload: Record<string, any> = {}
+  for (const [key, value] of Object.entries(updates || {})) {
+    if (!writable.includes(key)) continue
+    if (key === "email" || key === "sender_email" || key === "customer_email") payload[key] = normalizeEmail(value)
+    else if (typeof value === "string") payload[key] = value.replace(/\s+/g, " ").trim()
+    else payload[key] = value
+  }
+  if (writable.includes("updated_at")) payload.updated_at = new Date().toISOString()
+  if (Object.keys(payload).length === 0) throw new Error("No writable fields supplied")
+  return payload
+}
+
+async function updateCRMRecords(user: UserContext, args: Record<string, any>) {
+  const entity = assertCRMEntity(args.entity)
+  const ids = Array.isArray(args.ids) ? args.ids.map((id) => safeText(id)).filter(Boolean).slice(0, 100) : []
+  const match = args.match && typeof args.match === "object" ? args.match : {}
+  if (ids.length === 0 && Object.keys(match).length === 0) throw new Error("ids or match required")
+  const payload = cleanUpdatePayload(entity, args.updates || {})
+  let query: any = supabase.from(entity).update(payload).select("id")
+  query = scopedQuery(user, entity, query)
+  if (ids.length > 0) query = query.in("id", ids)
+  for (const [key, value] of Object.entries(match)) {
+    if (CRM_SCHEMA[entity].readable.includes(key) && value !== undefined && value !== null && value !== "") query = query.eq(key, value)
+  }
+  const { data, error } = await query
+  if (error) throw error
+  return { entity, updated: data?.length || 0, ids: (data || []).map((row: any) => row.id), applied: payload }
+}
+
+async function cleanCRMRecords(user: UserContext, args: Record<string, any>) {
+  const entity = assertCRMEntity(args.entity || "customers")
+  if (!["customers", "emails"].includes(entity)) throw new Error("clean_records supports customers and emails")
+  const limit = Math.min(Math.max(Number(args.limit) || 100, 1), 500)
+  const result = await queryCRMRecords(user, { entity, limit })
+  let changed = 0
+  const changes: Array<{ id: string; updates: Record<string, any> }> = []
+
+  for (const row of result.records) {
+    const updates: Record<string, any> = {}
+    if (entity === "customers") {
+      const email = normalizeEmail(row.email)
+      const name = safeText(row.name)
+      const phone = safeText(row.phone)
+      const location = safeText(row.location)
+      const notes = safeText(row.notes)
+      const relationship = CUSTOMER_TYPES.has(safeText(row.relationship_type).toLowerCase()) ? safeText(row.relationship_type).toLowerCase() : "customer"
+      if (email !== (row.email || "")) updates.email = email || null
+      if (name !== (row.name || "")) updates.name = name || null
+      if (phone !== (row.phone || "")) updates.phone = phone || null
+      if (location !== (row.location || "")) updates.location = location || null
+      if (notes !== (row.notes || "")) updates.notes = notes || null
+      if (relationship !== (row.relationship_type || "")) updates.relationship_type = relationship
+    } else {
+      const senderEmail = normalizeEmail(row.sender_email)
+      const senderName = safeText(row.sender_name)
+      const subject = safeText(row.subject)
+      if (senderEmail !== (row.sender_email || "")) updates.sender_email = senderEmail
+      if (senderName !== (row.sender_name || "")) updates.sender_name = senderName || null
+      if (subject !== (row.subject || "")) updates.subject = subject || null
+      if (args.compactText === true) {
+        const content = safeText(row.content_text)
+        if (content !== (row.content_text || "")) updates.content_text = content || null
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      const updated = await updateCRMRecords(user, { entity, ids: [row.id], updates })
+      changed += updated.updated
+      changes.push({ id: row.id, updates })
+    }
+  }
+
+  return { entity, scanned: result.records.length, changed, changes: changes.slice(0, 50) }
+}
+
 export const CRM_MCP_TOOLS = [
   {
+    name: "crm.describe_schema",
+    description: "Describe editable Supabase CRM tables, field permissions, and user/business scoping.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "crm.query_records",
-    description: "Query scoped CRM records from Supabase: customers, surveys, survey responses, and saved emails.",
+    description: "Query scoped CRM records from Supabase. Supports entity, limit, search, exact filters, and selected fields. Use this instead of prompt-loaded raw rows.",
     inputSchema: {
       type: "object",
       properties: {
-        entity: { type: "string", enum: ["customers", "surveys", "survey_responses", "emails"] },
+        entity: { type: "string", enum: ["customers", "surveys", "survey_responses", "emails", "crm_agent_tasks"] },
         limit: { type: "number" },
+        search: { type: "string" },
+        filters: { type: "object" },
+        fields: { type: "array", items: { type: "string" } },
       },
       required: ["entity"],
+    },
+  },
+  {
+    name: "crm.update_records",
+    description: "Update scoped Supabase CRM records. Use for customer/email/record cleanup after explicit user request or approval. Never updates outside current user/business scope.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity: { type: "string", enum: ["customers", "surveys", "survey_responses", "emails", "crm_agent_tasks"] },
+        ids: { type: "array", items: { type: "string" } },
+        match: { type: "object" },
+        updates: { type: "object" },
+      },
+      required: ["entity", "updates"],
+    },
+  },
+  {
+    name: "crm.clean_records",
+    description: "Normalize scoped customer or email records in Supabase: trim whitespace, lowercase emails, normalize relationship types, optionally compact email text.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity: { type: "string", enum: ["customers", "emails"] },
+        limit: { type: "number" },
+        compactText: { type: "boolean" },
+      },
+      required: ["entity"],
+    },
+  },
+  {
+    name: "crm.import_rows",
+    description: "Import structured CRM rows into Supabase. Rows may represent customers or saved emails. Upserts customers by business/email and saves emails for analysis.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rows: { type: "array", items: { type: "object" } },
+      },
+      required: ["rows"],
     },
   },
   {
@@ -1297,13 +1627,39 @@ export const CRM_MCP_TOOLS = [
   },
 ]
 
+export const CRM_OPENAI_TOOLS = CRM_MCP_TOOLS.map((tool) => ({
+  type: "function" as const,
+  function: {
+    name: tool.name.replace(/\./g, "__"),
+    description: tool.description,
+    parameters: tool.inputSchema,
+  },
+}))
+
+export function openAIToolNameToCRM(name: string) {
+  return name.replace(/__/g, ".")
+}
+
 export async function callCRMTool(user: UserContext, name: string, args: Record<string, any>, request?: NextRequest) {
+  if (name === "crm.describe_schema") {
+    return { content: [{ type: "text", text: JSON.stringify(CRM_SCHEMA, null, 2) }] }
+  }
+
   if (name === "crm.query_records") {
-    const data = await loadCRMData(user)
-    const entityName = args.entity === "survey_responses" ? "responses" : args.entity
-    const entity = entityName as keyof typeof data
-    const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 100)
-    return { content: [{ type: "text", text: JSON.stringify((data[entity] || []).slice(0, limit), null, 2) }] }
+    return { content: [{ type: "text", text: JSON.stringify(await queryCRMRecords(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.update_records") {
+    return { content: [{ type: "text", text: JSON.stringify(await updateCRMRecords(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.clean_records") {
+    return { content: [{ type: "text", text: JSON.stringify(await cleanCRMRecords(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.import_rows") {
+    const rows = Array.isArray(args.rows) ? args.rows : []
+    return { content: [{ type: "text", text: JSON.stringify(await importRowsToCRM(user, rows), null, 2) }] }
   }
 
   if (name === "crm.run_analysis") {

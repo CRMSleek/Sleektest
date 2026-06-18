@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import * as XLSX from "xlsx"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { supabase } from "@/lib/supabase/client"
 import { saveEmailsForAnalysis, type InboxEmailForAnalysis } from "@/lib/email-analysis-selection"
@@ -66,6 +67,17 @@ function parseCsv(text: string) {
   return rows.slice(1).map((values) =>
     Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])),
   )
+}
+
+function parseXlsx(buffer: ArrayBuffer) {
+  const workbook = XLSX.read(buffer, { type: "array" })
+  return workbook.SheetNames.flatMap((sheetName) => {
+    const sheet = workbook.Sheets[sheetName]
+    return XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" }).map((row) => ({
+      ...row,
+      sheet: row.sheet || sheetName,
+    }))
+  })
 }
 
 function flattenInput(input: any): any[] {
@@ -182,12 +194,15 @@ export async function POST(request: NextRequest) {
     const file = formData.get("file") as File | null
     if (!file) return NextResponse.json({ error: "file is required" }, { status: 400 })
 
-    const text = await file.text()
+    const buffer = await file.arrayBuffer()
+    const text = new TextDecoder().decode(buffer)
     const name = file.name.toLowerCase()
     let rows: any[] = []
 
     if (name.endsWith(".json") || file.type.includes("json")) {
       rows = flattenInput(JSON.parse(text))
+    } else if (name.endsWith(".xlsx") || name.endsWith(".xls") || file.type.includes("spreadsheet")) {
+      rows = parseXlsx(buffer)
     } else {
       rows = parseCsv(text)
     }

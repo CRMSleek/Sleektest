@@ -3,10 +3,13 @@ import OpenAI from "openai"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { supabase } from "@/lib/supabase/client"
 import {
+  CRM_OPENAI_TOOLS,
   DEFAULT_AGENT_SKILLS,
   buildCRMAgentContext,
+  callCRMTool,
   executeCRMAction,
   formatAgentContext,
+  openAIToolNameToCRM,
   type CRMAgentContext,
   type CRMActionProposal,
 } from "@/lib/crm-agent-tools"
@@ -18,7 +21,7 @@ const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 })
 
-const MODEL = "google/gemma-4-31b-it:free"
+const MODEL = process.env.OPENROUTER_MODEL || "google/gemma-4-31b-it:free"
 const MAX_STORED_MESSAGES = 44
 const MAX_CONTEXT_CHARS = 12000
 const COMPRESS_BATCH = 12
@@ -27,7 +30,7 @@ const SYSTEM_PROMPT = `
 You are SleekCRM Agent, an approval-gated CRM operator.
 
 Core loop:
-1. Investigate Supabase CRM data through tool results.
+1. Investigate Supabase CRM data through MCP tool calls.
 2. Form grounded insights from customers, survey responses, saved emails, and CRM records.
 3. Recommend concrete CRM tasks with reasoning and evidence.
 4. Ask for approval before external or destructive action.
@@ -36,6 +39,9 @@ Core loop:
 Rules:
 - Never claim an action was executed unless the API reports completion.
 - Never invent customers, quotes, counts, survey answers, emails, or analysis results.
+- Query Supabase with CRM MCP tools when record details are needed. Do not ask the user for data that tools can fetch.
+- Do not dump broad record lists into the answer. Query narrowly and summarize.
+- You may update scoped CRM records when the user explicitly asks for cleanup/import/update work.
 - Prefer direct, operational writing.
 - Distinguish insight, evidence, proposed action, and next approval step.
 - If cached analysis was used, mention that it came from the recent Supabase analysis cache.
@@ -68,8 +74,10 @@ type AssistantChat = {
 }
 
 type ChatMessage = {
-  role: "system" | "user" | "assistant"
+  role: "system" | "user" | "assistant" | "tool"
   content: string
+  tool_call_id?: string
+  tool_calls?: any[]
 }
 
 async function listChats(userId: string): Promise<AssistantChat[]> {
@@ -259,6 +267,66 @@ function buildChatMessages(params: {
   ]
 }
 
+function parseToolArguments(value: string | null | undefined) {
+  if (!value) return {}
+  try {
+    return JSON.parse(value)
+  } catch {
+    return {}
+  }
+}
+
+function toolResultText(result: unknown) {
+  const text = typeof result === "string" ? result : JSON.stringify(result, null, 2)
+  return text.length > 16000 ? `${text.slice(0, 16000)}\n...[truncated]` : text
+}
+
+async function runAgentCompletion(params: {
+  user: any
+  request: NextRequest
+  messages: ChatMessage[]
+}) {
+  const messages: any[] = [...params.messages]
+
+  for (let round = 0; round < 8; round += 1) {
+    const response = await client.chat.completions.create({
+      model: MODEL,
+      messages,
+      temperature: 0.35,
+      tools: CRM_OPENAI_TOOLS as any,
+      tool_choice: "auto",
+    })
+
+    const message = response.choices[0]?.message as any
+    const toolCalls = message?.tool_calls || []
+    if (!toolCalls.length) return typeof message?.content === "string" ? message.content.trim() : ""
+
+    messages.push({
+      role: "assistant",
+      content: message.content || "",
+      tool_calls: toolCalls,
+    })
+
+    for (const toolCall of toolCalls) {
+      const toolName = openAIToolNameToCRM(toolCall.function?.name || "")
+      const args = parseToolArguments(toolCall.function?.arguments)
+      let result: unknown
+      try {
+        result = await callCRMTool(params.user, toolName, args, params.request)
+      } catch (error: any) {
+        result = { error: error?.message || "Tool call failed" }
+      }
+      messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: toolResultText(result),
+      })
+    }
+  }
+
+  return "I reached the CRM tool-call limit before finishing. Narrow the request or approve a specific action."
+}
+
 function fallbackReply(context: CRMAgentContext | null) {
   if (!context) return "I could not load CRM data. Check Supabase configuration and try again."
   const lines = [
@@ -434,19 +502,8 @@ export async function POST(request: NextRequest) {
 
             try {
               if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
-              const stream = await client.chat.completions.create({
-                model: MODEL,
-                messages: inputMessages,
-                temperature: 0.35,
-                stream: true,
-              })
-
-              for await (const chunk of stream) {
-                const delta = chunk.choices[0]?.delta?.content || ""
-                if (!delta) continue
-                reply += delta
-                send("delta", { delta })
-              }
+              reply = await runAgentCompletion({ user, request, messages: inputMessages })
+              if (reply) send("delta", { delta: reply })
             } catch (error) {
               console.warn("Assistant stream failed, using fallback:", error)
             }
@@ -502,8 +559,7 @@ export async function POST(request: NextRequest) {
     let reply = ""
     try {
       if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
-      const response = await client.chat.completions.create({ model: MODEL, messages: inputMessages, temperature: 0.35 })
-      reply = response.choices[0]?.message?.content?.trim() || ""
+      reply = await runAgentCompletion({ user, request, messages: inputMessages })
     } catch (error) {
       console.warn("Assistant model failed, using fallback:", error)
     }

@@ -849,7 +849,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
         ref={importInputRef}
         type="file"
         className="hidden"
-        accept=".csv,.json,text/csv,application/json"
+        accept=".csv,.json,.xlsx,.xls,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
         onChange={(event) => {
           const file = event.target.files?.[0]
           if (file) void uploadImportFile(file)
