@@ -321,6 +321,7 @@ export async function POST(request: NextRequest) {
       chatId?: string
       action?: CRMActionProposal
       enabledSkills?: string[]
+      stream?: boolean
     }
 
     const mode = body.mode || (body.content ? "chat" : "refresh")
@@ -409,6 +410,94 @@ export async function POST(request: NextRequest) {
       context,
       enabledSkillIds: body.enabledSkills,
     })
+
+    if (body.stream) {
+      const encoder = new TextEncoder()
+
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            const send = (event: string, payload: Record<string, unknown>) => {
+              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`))
+            }
+
+            let reply = ""
+
+            send("context", {
+              context,
+              workspace: context,
+              toolStatuses: context.statuses,
+              proposals: context.proposals,
+              activeChatId: chat.id,
+              skills: DEFAULT_AGENT_SKILLS,
+            })
+
+            try {
+              if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
+              const stream = await client.chat.completions.create({
+                model: MODEL,
+                messages: inputMessages,
+                temperature: 0.35,
+                stream: true,
+              })
+
+              for await (const chunk of stream) {
+                const delta = chunk.choices[0]?.delta?.content || ""
+                if (!delta) continue
+                reply += delta
+                send("delta", { delta })
+              }
+            } catch (error) {
+              console.warn("Assistant stream failed, using fallback:", error)
+            }
+
+            if (!reply) {
+              reply = fallbackReply(context)
+              send("delta", { delta: reply })
+            }
+
+            await supabase.from("analytics_assistant_messages").insert({
+              user_id: user.id,
+              chat_id: chat.id,
+              role: "assistant",
+              content: reply,
+              created_at: new Date().toISOString(),
+            })
+
+            await touchChat(chat.id)
+            await ensureWithinLimits(chat.id)
+
+            const [updatedMessages, chats, updatedChat] = await Promise.all([listMessages(chat.id), serializeChats(user.id), getChat(user.id, chat.id)])
+
+            send("done", {
+              reply,
+              messages: updatedMessages.map((message) => ({
+                id: message.id,
+                role: message.role,
+                content: message.content,
+                created_at: message.created_at,
+              })),
+              chats,
+              activeChatId: chat.id,
+              chat: updatedChat,
+              context,
+              workspace: context,
+              toolStatuses: context.statuses,
+              proposals: context.proposals,
+              skills: DEFAULT_AGENT_SKILLS,
+            })
+            controller.close()
+          },
+        }),
+        {
+          headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+          },
+        },
+      )
+    }
 
     let reply = ""
     try {

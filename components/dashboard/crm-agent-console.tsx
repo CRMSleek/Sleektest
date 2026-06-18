@@ -8,6 +8,7 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  Command,
   FileUp,
   FileText,
   History,
@@ -21,6 +22,8 @@ import {
   RefreshCw,
   Send,
   Settings2,
+  Paperclip,
+  Sparkles,
   Trash2,
   X,
   XCircle,
@@ -163,7 +166,27 @@ function parseAssistantMessage(content: string): { text: string; inlineAction: I
     }
   }
 
-  return { text: text || "Review the proposed action.", inlineAction }
+  return { text: text || (content.trim() ? "Review the proposed action." : ""), inlineAction }
+}
+
+function parseStreamBlock(block: string) {
+  const event = block
+    .split("\n")
+    .find((line) => line.startsWith("event:"))
+    ?.replace("event:", "")
+    .trim()
+  const data = block
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.replace("data:", "").trim())
+    .join("\n")
+
+  if (!event || !data) return null
+  try {
+    return { event, payload: JSON.parse(data) as AssistantResponse & { delta?: string } }
+  } catch {
+    return null
+  }
 }
 
 function useEnabledSkills(skills: AgentSkill[]) {
@@ -360,7 +383,7 @@ function ProposedActionsPanel({
               return (
                 <div
                   key={proposal.id}
-                  className="w-full min-w-0 overflow-hidden rounded-lg border bg-background p-4 shadow-sm"
+                  className="w-full min-w-0 overflow-hidden rounded-lg border bg-background p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
                 >
                   <div className="flex min-w-0 items-start gap-3">
                     <div className="shrink-0 rounded-md bg-primary/10 p-2 text-primary">
@@ -479,8 +502,8 @@ function HistoryPanel({
               key={chat.id}
               type="button"
               onClick={() => onOpenChat(chat.id)}
-              className={`group flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
-                chat.id === activeChatId ? "border-primary bg-primary/5" : "bg-background hover:bg-muted/50"
+              className={`group flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-all duration-200 hover:-translate-y-0.5 ${
+                chat.id === activeChatId ? "border-primary bg-primary/5 shadow-sm" : "bg-background hover:border-primary/30 hover:bg-muted/50"
               }`}
             >
               <History className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -533,8 +556,12 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(true)
   const [historyOpen, setHistoryOpen] = useState(true)
+  const [composerFocused, setComposerFocused] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
+  const [importFileName, setImportFileName] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { enabled, toggle } = useEnabledSkills(skills)
 
   const snapshot = context?.snapshot
@@ -543,12 +570,25 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, sending])
 
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = "72px"
+    textarea.style.height = `${Math.min(190, Math.max(72, textarea.scrollHeight))}px`
+  }, [input])
+
+  useEffect(() => {
+    if (input.startsWith("/") && !input.includes(" ")) setCommandOpen(true)
+  }, [input])
+
   const applyResponse = (json: AssistantResponse) => {
-    setContext(json.context || json.workspace || null)
-    setProposals((json.proposals || json.context?.proposals || json.workspace?.proposals || []).map((proposal) => ({ ...proposal, status: proposal.status || "proposed" })))
-    setChats(json.chats || [])
-    setActiveChatId(json.activeChatId || null)
-    setSkills(json.skills || skills)
+    const nextContext = json.context || json.workspace
+    const nextProposals = json.proposals || json.context?.proposals || json.workspace?.proposals
+    if (nextContext) setContext(nextContext)
+    if (nextProposals) setProposals(nextProposals.map((proposal) => ({ ...proposal, status: proposal.status || "proposed" })))
+    if (json.chats) setChats(json.chats)
+    if (json.activeChatId !== undefined) setActiveChatId(json.activeChatId || null)
+    if (json.skills) setSkills(json.skills)
     if (json.messages) setMessages(json.messages.length ? json.messages : [WELCOME])
   }
 
@@ -601,8 +641,14 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     if (!trimmed || sending) return
 
     const optimistic: AgentMessage = { id: crypto.randomUUID(), role: "user", content: trimmed, created_at: new Date().toISOString() }
-    setMessages((current) => [...current.filter((message) => message.id !== "welcome"), optimistic])
+    const streamingId = crypto.randomUUID()
+    setMessages((current) => [
+      ...current.filter((message) => message.id !== "welcome"),
+      optimistic,
+      { id: streamingId, role: "assistant", content: "", created_at: new Date().toISOString() },
+    ])
     setInput("")
+    setCommandOpen(false)
     setSending(true)
     setStatus("Working")
 
@@ -610,16 +656,59 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const response = await fetch("/api/analytics/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: trimmed, mode: "chat", chatId: activeChatId, enabledSkills: enabled }),
+        body: JSON.stringify({ content: trimmed, mode: "chat", chatId: activeChatId, enabledSkills: enabled, stream: true }),
       })
-      const json = (await response.json()) as AssistantResponse
-      if (!response.ok) throw new Error(json.error || "Agent failed")
-      applyResponse(json)
+
+      if (!response.ok) {
+        const json = (await response.json().catch(() => ({}))) as AssistantResponse
+        throw new Error(json.error || "Agent failed")
+      }
+
+      if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+        const json = (await response.json()) as AssistantResponse
+        applyResponse(json)
+        setStatus("")
+        return
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const blocks = buffer.split("\n\n")
+        buffer = blocks.pop() || ""
+
+        for (const block of blocks) {
+          const parsed = parseStreamBlock(block)
+          if (!parsed) continue
+
+          if (parsed.event === "context") {
+            applyResponse(parsed.payload)
+          }
+
+          if (parsed.event === "delta" && parsed.payload.delta) {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === streamingId ? { ...message, content: `${message.content}${parsed.payload.delta}` } : message,
+              ),
+            )
+          }
+
+          if (parsed.event === "done") {
+            applyResponse(parsed.payload)
+          }
+        }
+      }
+
       setStatus("")
     } catch (error) {
       console.error("CRM agent send failed:", error)
       setMessages((current) => [
-        ...current,
+        ...current.filter((message) => message.id !== streamingId),
         { id: crypto.randomUUID(), role: "assistant", content: "CRM agent failed to respond. Check model/API configuration.", created_at: new Date().toISOString() },
       ])
       setStatus("Agent response failed")
@@ -671,6 +760,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
 
   const uploadImportFile = async (file: File) => {
     setImporting(true)
+    setImportFileName(file.name)
     setStatus("Importing CRM data")
     try {
       const formData = new FormData()
@@ -704,6 +794,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       setStatus("CRM import failed")
     } finally {
       setImporting(false)
+      setImportFileName("")
       if (importInputRef.current) importInputRef.current.value = ""
     }
   }
@@ -717,6 +808,38 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     ],
     [],
   )
+
+  const commandSuggestions = useMemo(
+    () => [
+      {
+        icon: Mail,
+        label: "Analyze emails",
+        prompt: "Analyze all relevant customer inquiry emails and propose actions.",
+      },
+      {
+        icon: Sparkles,
+        label: "This week",
+        prompt: "What should I focus on this week?",
+      },
+      {
+        icon: CheckCircle2,
+        label: "Churn risk",
+        prompt: "Find churn risk and propose follow-ups.",
+      },
+      {
+        icon: FileText,
+        label: "Feature requests",
+        prompt: "What feature requests are clustering?",
+      },
+    ],
+    [],
+  )
+
+  const selectCommand = (prompt: string) => {
+    setInput(prompt)
+    setCommandOpen(false)
+    textareaRef.current?.focus()
+  }
 
   return (
     <div className="flex h-[100dvh] min-h-0 bg-background text-foreground">
@@ -778,10 +901,6 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
               <Settings2 className="mr-2 h-4 w-4" />
               Skills
             </Button>
-            <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()} disabled={importing || sending}>
-              <FileUp className="mr-2 h-4 w-4" />
-              {importing ? "Importing" : "Import"}
-            </Button>
             <Button variant="outline" size="icon" onClick={() => void loadAgent(activeChatId || undefined)} disabled={loading || sending} aria-label="Refresh agent">
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             </Button>
@@ -800,30 +919,37 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                 return (
                   <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div
-                      className={`max-w-[88%] rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${
+                      className={`max-w-[88%] rounded-lg px-4 py-3 text-sm leading-6 shadow-sm transition-all duration-200 ${
                         message.role === "user"
                           ? "bg-primary text-primary-foreground"
-                          : "border bg-card text-card-foreground"
+                          : "border bg-card text-card-foreground hover:border-primary/20"
                       }`}
                     >
                       {message.role === "assistant" ? (
                         <>
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
-                              ul: ({ node, ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
-                              ol: ({ node, ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
-                              strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
-                              code: ({ node, className, children, ...props }) => (
-                                <code className="rounded bg-muted px-1 py-0.5 text-xs" {...props}>
-                                  {children}
-                                </code>
-                              ),
-                            }}
-                          >
-                            {parsed.text}
-                          </ReactMarkdown>
+                          {parsed.text ? (
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                                ul: ({ node, ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
+                                ol: ({ node, ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
+                                strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
+                                code: ({ node, className, children, ...props }) => (
+                                  <code className="rounded bg-muted px-1 py-0.5 text-xs" {...props}>
+                                    {children}
+                                  </code>
+                                ),
+                              }}
+                            >
+                              {parsed.text}
+                            </ReactMarkdown>
+                          ) : (
+                            <span className="inline-flex items-center gap-2 text-muted-foreground">
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                              Working
+                            </span>
+                          )}
                           {parsed.inlineAction ? (
                             <div className="mt-3 rounded-lg border bg-background p-3">
                               <p className="text-sm font-medium">{parsed.inlineAction.title}</p>
@@ -845,52 +971,125 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                 )
               })}
 
-              {sending ? (
-                <div className="flex justify-start">
-                  <div className="rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
-                    <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />
-                    Working
-                  </div>
-                </div>
-              ) : null}
-
               <div ref={messagesEndRef} />
             </div>
           </ScrollArea>
 
-          <div className="shrink-0 border-t bg-card p-4">
+          <div className="shrink-0 border-t bg-card/95 p-4">
             {messages.length <= 1 ? (
               <div className="mx-auto mb-3 flex max-w-4xl flex-wrap gap-2">
                 {suggestedPrompts.map((prompt) => (
-                  <Button key={prompt} type="button" variant="outline" size="sm" onClick={() => void sendChat(prompt)}>
+                  <Button key={prompt} type="button" variant="outline" size="sm" className="transition-all hover:-translate-y-0.5 hover:border-primary/40" onClick={() => void sendChat(prompt)}>
                     {prompt}
                   </Button>
                 ))}
               </div>
             ) : null}
 
-            <div className="mx-auto max-w-4xl">
-              <div className="relative">
+            <div className="relative mx-auto max-w-4xl">
+              {commandOpen ? (
+                <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border bg-popover shadow-xl">
+                  <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">Commands</div>
+                  <div className="p-1">
+                    {commandSuggestions.map((command) => {
+                      const Icon = command.icon
+                      return (
+                        <button
+                          key={command.label}
+                          type="button"
+                          onClick={() => selectCommand(command.prompt)}
+                          className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <Icon className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block font-medium">{command.label}</span>
+                            <span className="block truncate text-xs text-muted-foreground">{command.prompt}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <div
+                className={`relative overflow-hidden rounded-xl border bg-background shadow-sm transition-all duration-200 ${
+                  composerFocused ? "border-primary/40 shadow-lg ring-4 ring-primary/10" : "hover:border-primary/30"
+                }`}
+              >
                 <Textarea
+                  ref={textareaRef}
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
+                  onFocus={() => setComposerFocused(true)}
+                  onBlur={() => setComposerFocused(false)}
                   onKeyDown={(event) => {
+                    if (commandOpen && (event.key === "Tab" || event.key === "Enter") && input.startsWith("/")) {
+                      event.preventDefault()
+                      selectCommand(commandSuggestions[0].prompt)
+                      return
+                    }
+                    if (event.key === "Escape") {
+                      setCommandOpen(false)
+                      return
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault()
                       void sendChat(input)
                     }
                   }}
                   placeholder="Ask about customers, surveys, emails, churn risk, feature requests, or this week's focus..."
-                  className="min-h-28 resize-none pb-12 pr-20"
+                  className="min-h-[72px] resize-none border-0 bg-transparent px-4 py-4 pb-16 shadow-none focus-visible:ring-0"
                 />
-                <div className="absolute bottom-3 left-3 text-xs text-muted-foreground">Shift+Enter for newline</div>
+
+                {importFileName ? (
+                  <div className="absolute bottom-14 left-3 right-3 flex min-w-0 items-center gap-2 rounded-md border bg-muted/70 px-3 py-2 text-xs text-muted-foreground">
+                    <FileUp className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{importing ? `Importing ${importFileName}` : importFileName}</span>
+                  </div>
+                ) : null}
+
+                <div className="flex items-center justify-between gap-3 border-t bg-muted/20 px-3 py-3">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => importInputRef.current?.click()}
+                      disabled={importing || sending}
+                      aria-label="Upload CRM data"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={commandOpen ? "secondary" : "ghost"}
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => {
+                        setCommandOpen((current) => !current)
+                        textareaRef.current?.focus()
+                      }}
+                      aria-label="Show commands"
+                    >
+                      <Command className="h-4 w-4" />
+                    </Button>
+                    <span className="hidden truncate px-2 text-xs text-muted-foreground sm:inline">
+                      {importing ? "Importing CRM data" : "Shift+Enter for newline"}
+                    </span>
+                  </div>
+
                 <Button
                   onClick={() => void sendChat(input)}
                   disabled={sending || !input.trim()}
-                  className="absolute bottom-3 right-3 h-8 px-3"
+                    className="h-8 px-3 transition-all hover:-translate-y-0.5"
                 >
                   {sending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
+                </div>
               </div>
             </div>
           </div>

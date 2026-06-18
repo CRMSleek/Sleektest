@@ -83,7 +83,7 @@ export type CRMAgentContext = {
 }
 
 function shouldAutoSelectRelevantEmails(prompt: string) {
-  return /\b(all|every|entire|inbox)\b.*\bemails?\b|\bemails?\b.*\b(all|every|entire|inbox)\b|auto-?select.*emails?|select.*relevant.*emails?/i.test(prompt)
+  return /\b(all|every|entire|inbox)\b.*\bemails?\b|\bemails?\b.*\b(all|every|entire|inbox)\b|auto-?select.*emails?|select.*relevant.*emails?|analy[sz]e.*emails?|emails?.*analy[sz]e|customer inquiries|customer inquiry|relevant.*topics.*emails?/i.test(prompt)
 }
 
 export const DEFAULT_AGENT_SKILLS = [
