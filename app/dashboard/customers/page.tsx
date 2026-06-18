@@ -109,11 +109,7 @@ export default function RelationshipsPage() {
   }
 
   return (
-    <div
-      className="space-y-6 p-6"
-      initial="hidden"
-      animate="visible"
-      variants={fadeUp}>
+    <div className="space-y-6 p-6">
       <motion.div 
       className="flex items-center justify-between"
       initial="hidden"

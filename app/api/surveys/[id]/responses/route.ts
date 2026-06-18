@@ -1,7 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase/client"
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+type RouteContext = { params: Promise<{ id: string }> }
+
+export async function GET(request: NextRequest, { params }: RouteContext) {
   try {
     // Fetch responses for this survey (owner-facing; auth already enforced by middleware)
 
@@ -22,7 +24,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: RouteContext) {
   try {
     const { answers, customerInfo } = await request.json()
     if (customerInfo?.phone && !customerInfo?.email) {

@@ -312,6 +312,7 @@ function ChatHistoryModal({
   sending,
   onOpenChat,
   onNewChat,
+  onDeleteChat,
 }: {
   open: boolean
   onClose: () => void

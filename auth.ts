@@ -66,17 +66,20 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
       }
 
       // Refresh token if expired
-      if (token.accessTokenExpires && Date.now() > token.accessTokenExpires) {
+      const accessTokenExpires =
+        typeof token.accessTokenExpires === "number" ? token.accessTokenExpires : Number(token.accessTokenExpires || 0)
+      if (accessTokenExpires && Date.now() > accessTokenExpires) {
         return await refreshAccessToken(token)
       }
 
       return token
     },
     async session({ session, token }) {
-      session.user = session.user || {}
-      session.user.googleId = token.googleId
-      session.accessToken = token.accessToken
-      session.refreshToken = token.refreshToken
+      const nextSession = session as any
+      nextSession.user = nextSession.user || {}
+      nextSession.user.googleId = token.googleId
+      nextSession.accessToken = token.accessToken
+      nextSession.refreshToken = token.refreshToken
       return session
     },
     async redirect({ url, baseUrl }) {

@@ -455,13 +455,14 @@ function EmailSend({ isOpen, onClose, mode = 'compose', originalEmail }: EmailSe
               type="file"
               id="file-upload"
               multiple
-              className="hidden"
-              onChange={(e) => {
-                if (!e.target.files) return
-                setFiles((prev) => [...prev, ...Array.from(e.target.files)])
-                // no need to reset value manually anymore
-              }}
-            />
+	              className="hidden"
+	              onChange={(e) => {
+	                const selectedFiles = e.target.files
+	                if (!selectedFiles) return
+	                setFiles((prev) => [...prev, ...Array.from(selectedFiles)])
+	                // no need to reset value manually anymore
+	              }}
+	            />
           </div>
           <button
             type="submit"

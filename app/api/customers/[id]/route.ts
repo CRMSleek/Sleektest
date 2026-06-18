@@ -2,7 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase/client"
 import { getCurrentUser } from "@/lib/supabase/auth"
 
-export async function GET(request: NextRequest, context: { params: { id: string } }) {
+type RouteContext = { params: Promise<{ id: string }> }
+
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const user = await getCurrentUser(request)
     if (!user || !user.business?.id) {
@@ -65,7 +67,7 @@ export async function GET(request: NextRequest, context: { params: { id: string 
   }
 }
 
-export async function PUT(request: NextRequest, context: { params: { id: string } }) {
+export async function PUT(request: NextRequest, context: RouteContext) {
   try {
     const user = await getCurrentUser(request)
     if (!user || !user.business?.id) {
@@ -104,7 +106,7 @@ export async function PUT(request: NextRequest, context: { params: { id: string 
   }
 }
 
-export async function DELETE(request: NextRequest, context: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
     const user = await getCurrentUser(request)
     if (!user || !user.business?.id) {

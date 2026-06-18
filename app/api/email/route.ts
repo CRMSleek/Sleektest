@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
 
     lock = await client.getMailboxLock("INBOX")
 
-    const total = client.mailbox.exists || 0
+    const total = client.mailbox ? client.mailbox.exists || 0 : 0
     if (!total) {
       return NextResponse.json(
         {

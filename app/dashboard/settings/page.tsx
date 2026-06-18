@@ -36,7 +36,7 @@ export default function SettingsPage() {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { duration: 0.7 } },
   }
-  const user = useAuth()
+  const { user, logout } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
   const { theme, setTheme } = useTheme()
@@ -332,7 +332,7 @@ export default function SettingsPage() {
       }
 
       // Logout and redirect
-      await user.logout()
+      await logout()
       
       toast({
         title: "Account deleted",

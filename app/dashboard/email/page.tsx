@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import EmailSend from "@/components/ui/email-send"
 import EmailView from "@/components/ui/email-view"
-import { MoreHorizontal, Plus, Search, ChevronLeft, ChevronRight, Link as LinkIcon } from "lucide-react"
+import { MoreHorizontal, Plus, Search, ChevronLeft, ChevronRight, Link as LinkIcon, Wand2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { motion, easeOut } from "framer-motion"
 import { Badge } from "@/components/ui/badge"
@@ -46,6 +46,7 @@ export default function EmailPage() {
   const [selectedEmailForAttachment, setSelectedEmailForAttachment] = useState<any>(null)
   const [selectedRelationshipId, setSelectedRelationshipId] = useState<string>("")
   const [isAttachingEmail, setIsAttachingEmail] = useState(false)
+  const [isAutoSelecting, setIsAutoSelecting] = useState(false)
   const { toast } = useToast()
 
   const fadeUp = {
@@ -373,6 +374,45 @@ export default function EmailPage() {
     }
   }
 
+  const handleAutoSelectRelevantEmails = async () => {
+    if (isAutoSelecting || !OAuth) return
+    setIsAutoSelecting(true)
+    try {
+      const response = await fetch("/api/email/auto-select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxResults: 75 }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || "Failed to auto-select emails")
+
+      const selectedIds = new Set<string>((data.selected || []).map((email: any) => email.id))
+      const updatedSavedIds = new Set(savedEmailIds)
+      selectedIds.forEach((id) => updatedSavedIds.add(id))
+      ;(data.saved || []).forEach((id: string) => updatedSavedIds.add(id))
+      setSavedEmailIds(updatedSavedIds)
+
+      const updatedChecked = new Set(checkedEmails)
+      allEmails.forEach((email) => {
+        if (selectedIds.has(email.id)) updatedChecked.add(email.id)
+      })
+      setCheckedEmails(updatedChecked)
+
+      toast({
+        title: "Relevant emails selected",
+        description: `${data.selected?.length || 0} relevant email(s) found. ${data.saved?.length || 0} new email(s) saved for analysis.`,
+      })
+    } catch (error: any) {
+      toast({
+        title: "Auto-select failed",
+        description: error?.message || "Could not select relevant emails.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAutoSelecting(false)
+    }
+  }
+
   useEffect(() => {
     getOauth()
     fetchEmails()
@@ -498,6 +538,10 @@ export default function EmailPage() {
           <Input placeholder="Search emails..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         </div>
+        <Button variant="outline" className="gap-2" disabled={!OAuth || isAutoSelecting} onClick={handleAutoSelectRelevantEmails}>
+          <Wand2 className="h-4 w-4" />
+          {isAutoSelecting ? "Selecting..." : "Auto-select relevant"}
+        </Button>
       </motion.div>
 
       <motion.div className="overflow-x-auto rounded-lg border bg-background shadow-sm" variants={fade}>

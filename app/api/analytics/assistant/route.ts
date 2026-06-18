@@ -3,11 +3,13 @@ import OpenAI from "openai"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { supabase } from "@/lib/supabase/client"
 import {
-  buildAnalyticsWorkspace,
-  executeWorkspaceAction,
-  formatWorkspaceContext,
-  type AnalyticsWorkspace,
-} from "@/lib/agentic-crm"
+  DEFAULT_AGENT_SKILLS,
+  buildCRMAgentContext,
+  executeCRMAction,
+  formatAgentContext,
+  type CRMAgentContext,
+  type CRMActionProposal,
+} from "@/lib/crm-agent-tools"
 
 export const runtime = "nodejs"
 
@@ -16,44 +18,29 @@ const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 })
 
-const SYSTEM_PROMPT = `
-You are the SleekCRM analytics agent. The product is action-first.
-
-Your job:
-- Explain the current workspace state clearly.
-- Keep the user focused on one concrete action in the center panel.
-- Reference grounded signals from customers, surveys, emails, and responses.
-- Mention source citations when possible.
-- Be concise, direct, and useful.
-- Prefer a recommendation that can be approved and executed immediately.
-
-Style:
-- Use plain language, markdown formatting (bold, italics), and short bullets when helpful.
-- Do not invent data that is not in the workspace context.
-- If the user asks to act, respond with the next step and the rationale.
-
-Interactive Actions:
-- If you propose an action for the user to take (e.g., "Draft and Send email?"), you MUST include a JSON block at the very end of your message in this exact format to render interactive buttons:
-\`\`\`json
-{
-  "proposedAction": {
-    "title": "Draft and Send email?",
-    "options": [
-      { "label": "Yes", "value": "Yes, please draft it." },
-      { "label": "No", "value": "No, let's skip this." },
-      { "label": "Add Info", "value": "I want to add more information first." }
-    ]
-  }
-}
-\`\`\`
-`.trim()
-
 const MODEL = "google/gemma-4-31b-it:free"
-
-const MAX_STORED_MESSAGES = 40
-const MAX_CONTEXT_CHARS = 9000
+const MAX_STORED_MESSAGES = 44
+const MAX_CONTEXT_CHARS = 12000
 const COMPRESS_BATCH = 12
-const MAX_COMPRESS_ROUNDS = 25
+
+const SYSTEM_PROMPT = `
+You are SleekCRM Agent, an approval-gated CRM operator.
+
+Core loop:
+1. Investigate Supabase CRM data through tool results.
+2. Form grounded insights from customers, survey responses, saved emails, and CRM records.
+3. Recommend concrete CRM tasks with reasoning and evidence.
+4. Ask for approval before external or destructive action.
+5. After approval, summarize execution result.
+
+Rules:
+- Never claim an action was executed unless the API reports completion.
+- Never invent customers, quotes, counts, survey answers, emails, or analysis results.
+- Prefer direct, operational writing.
+- Distinguish insight, evidence, proposed action, and next approval step.
+- If cached analysis was used, mention that it came from the recent Supabase analysis cache.
+- If evidence is thin, say what data is missing and propose the smallest next data-gathering task.
+`.trim()
 
 type DbChat = {
   id: string
@@ -80,6 +67,11 @@ type AssistantChat = {
   updated_at: string
 }
 
+type ChatMessage = {
+  role: "system" | "user" | "assistant"
+  content: string
+}
+
 async function listChats(userId: string): Promise<AssistantChat[]> {
   const { data, error } = await supabase
     .from("analytics_assistant_chats")
@@ -91,24 +83,21 @@ async function listChats(userId: string): Promise<AssistantChat[]> {
     console.error("listChats:", error)
     return []
   }
-
   return (data as AssistantChat[]) || []
 }
 
 async function cleanupEmptyChats(userId: string, excludeChatId?: string) {
-  const { data: emptyChats } = await supabase
+  const { data } = await supabase
     .from("analytics_assistant_chats")
     .select("id, created_at, updated_at")
     .eq("user_id", userId)
 
-  if (emptyChats) {
-    const idsToDelete = emptyChats
-      .filter(c => c.created_at === c.updated_at && c.id !== excludeChatId)
-      .map(c => c.id)
-    
-    if (idsToDelete.length > 0) {
-      await supabase.from("analytics_assistant_chats").delete().in("id", idsToDelete)
-    }
+  const idsToDelete = (data || [])
+    .filter((chat: any) => chat.created_at === chat.updated_at && chat.id !== excludeChatId)
+    .map((chat: any) => chat.id)
+
+  if (idsToDelete.length > 0) {
+    await supabase.from("analytics_assistant_chats").delete().in("id", idsToDelete)
   }
 }
 
@@ -124,7 +113,6 @@ async function getChat(userId: string, chatId: string): Promise<DbChat | null> {
     console.error("getChat:", error)
     return null
   }
-
   return (data as DbChat) || null
 }
 
@@ -141,27 +129,14 @@ async function getLatestChat(userId: string): Promise<DbChat | null> {
     console.error("getLatestChat:", error)
     return null
   }
-
   return (data as DbChat) || null
 }
 
-function buildChatTitle(workspace: AnalyticsWorkspace | null) {
-  const raw = workspace?.brief.actionLabel || workspace?.action.title || "Insight chat"
-  return raw.slice(0, 72)
-}
-
-async function createChat(userId: string, workspace: AnalyticsWorkspace | null): Promise<DbChat | null> {
+async function createChat(userId: string, title = "CRM agent session"): Promise<DbChat | null> {
   const now = new Date().toISOString()
-  const title = buildChatTitle(workspace)
   const { data, error } = await supabase
     .from("analytics_assistant_chats")
-    .insert({
-      user_id: userId,
-      title,
-      rolling_summary: "",
-      created_at: now,
-      updated_at: now,
-    })
+    .insert({ user_id: userId, title: title.slice(0, 72), rolling_summary: "", created_at: now, updated_at: now })
     .select("id, user_id, title, rolling_summary, created_at, updated_at")
     .single()
 
@@ -169,42 +144,34 @@ async function createChat(userId: string, workspace: AnalyticsWorkspace | null):
     console.error("createChat:", error)
     return null
   }
-
   return data as DbChat
 }
 
-async function resolveChat(
-  userId: string,
-  chatId: string | undefined,
-  workspace: AnalyticsWorkspace | null,
-): Promise<DbChat | null> {
+async function resolveChat(userId: string, chatId?: string, title?: string): Promise<DbChat | null> {
   if (chatId) {
-    const existing = await getChat(userId, chatId)
-    if (existing) return existing
+    const chat = await getChat(userId, chatId)
+    if (chat) return chat
   }
-
   const latest = await getLatestChat(userId)
-  if (latest) return latest
+  return latest || createChat(userId, title)
+}
 
-  return createChat(userId, workspace)
+async function touchChat(chatId: string, title?: string) {
+  const updates: Record<string, any> = { updated_at: new Date().toISOString() }
+  if (title) updates.title = title.slice(0, 72)
+  await supabase.from("analytics_assistant_chats").update(updates).eq("id", chatId)
 }
 
 async function getRollingSummary(chatId: string): Promise<string> {
-  const { data } = await supabase
-    .from("analytics_assistant_chats")
-    .select("rolling_summary")
-    .eq("id", chatId)
-    .maybeSingle()
+  const { data } = await supabase.from("analytics_assistant_chats").select("rolling_summary").eq("id", chatId).maybeSingle()
   return (data?.rolling_summary as string) || ""
 }
 
 async function setRollingSummary(chatId: string, summary: string) {
-  const now = new Date().toISOString()
-  await supabase.from("analytics_assistant_chats").update({ rolling_summary: summary, updated_at: now }).eq("id", chatId)
-}
-
-async function touchChat(chatId: string) {
-  await supabase.from("analytics_assistant_chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId)
+  await supabase
+    .from("analytics_assistant_chats")
+    .update({ rolling_summary: summary, updated_at: new Date().toISOString() })
+    .eq("id", chatId)
 }
 
 async function listMessages(chatId: string): Promise<DbMessage[]> {
@@ -223,7 +190,7 @@ async function listMessages(chatId: string): Promise<DbMessage[]> {
 }
 
 function totalChars(messages: DbMessage[]) {
-  return messages.reduce((n, m) => n + (m.content?.length || 0), 0)
+  return messages.reduce((sum, message) => sum + (message.content?.length || 0), 0)
 }
 
 function shouldCompress(messages: DbMessage[]) {
@@ -232,6 +199,7 @@ function shouldCompress(messages: DbMessage[]) {
 
 async function mergeSummaries(prev: string, transcript: string): Promise<string> {
   try {
+    if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
     const response = await client.chat.completions.create({
       model: MODEL,
       temperature: 0.2,
@@ -239,88 +207,69 @@ async function mergeSummaries(prev: string, transcript: string): Promise<string>
         {
           role: "system",
           content:
-            "You compress CRM analytics chat history. Merge the prior summary with the new transcript. Preserve user goals, named metrics, decisions, open questions, product areas (surveys, email, customers), and any approved actions. Max about 600 words. Plain text only, no JSON.",
+            "Compress CRM agent chat history. Preserve goals, grounded findings, proposed actions, approvals, rejected actions, and open questions. Plain text only.",
         },
-        {
-          role: "user",
-          content: `Prior summary:\n${prev || "(none)"}\n\nNew messages:\n${transcript.slice(0, 12000)}\n\nMerged summary:`,
-        },
+        { role: "user", content: `Prior summary:\n${prev || "(none)"}\n\nTranscript:\n${transcript.slice(0, 12000)}` },
       ],
     })
-    const out = (response.choices[0]?.message?.content || "").trim()
+    const out = response.choices[0]?.message?.content?.trim()
     if (out) return out
-  } catch (e) {
-    console.warn("mergeSummaries LLM failed, using text fallback:", e)
+  } catch (error) {
+    console.warn("mergeSummaries fallback:", error)
   }
-
-  const fallback = [prev, transcript.slice(0, 4000)].filter(Boolean).join("\n---\n")
-  return fallback.slice(0, 8000)
+  return [prev, transcript.slice(0, 4000)].filter(Boolean).join("\n---\n").slice(0, 8000)
 }
 
-type ChatMessage = {
-  role: "system" | "user" | "assistant"
-  content: string
+async function ensureWithinLimits(chatId: string) {
+  for (let round = 0; round < 20; round += 1) {
+    const messages = await listMessages(chatId)
+    if (!shouldCompress(messages)) break
+    const batch = messages.slice(0, Math.min(COMPRESS_BATCH, messages.length))
+    const transcript = batch.map((message) => `${message.role}: ${message.content}`).join("\n")
+    const merged = await mergeSummaries(await getRollingSummary(chatId), transcript)
+    await setRollingSummary(chatId, merged)
+    await supabase.from("analytics_assistant_messages").delete().in("id", batch.map((message) => message.id))
+  }
 }
 
-function buildChatMessages(
-  rollingSummary: string,
-  messages: DbMessage[],
-  userName?: string | null,
-  workspace?: AnalyticsWorkspace | null,
-): ChatMessage[] {
-  const workspaceContext = formatWorkspaceContext(workspace || null)
-  const summaryBlock = rollingSummary ? `\nEarlier conversation summary:\n${rollingSummary}` : ""
-  const userBlock = userName ? `\nUser display name: ${userName}` : ""
+function enabledSkillPrompt(enabledSkillIds?: string[]) {
+  const enabled = DEFAULT_AGENT_SKILLS.filter((skill) => enabledSkillIds?.includes(skill.id))
+  if (enabled.length === 0) return "No custom skills enabled."
+  return enabled.map((skill) => `Skill: ${skill.name}\nDescription: ${skill.description}\nInstructions: ${skill.instructions}`).join("\n\n")
+}
 
+function buildChatMessages(params: {
+  rollingSummary: string
+  messages: DbMessage[]
+  userName?: string | null
+  context: CRMAgentContext | null
+  enabledSkillIds?: string[]
+}): ChatMessage[] {
+  const summaryBlock = params.rollingSummary ? `\nEarlier conversation summary:\n${params.rollingSummary}` : ""
+  const userBlock = params.userName ? `\nUser display name: ${params.userName}` : ""
   return [
     {
       role: "system",
-      content: `${SYSTEM_PROMPT}\n\nCurrent workspace:\n${workspaceContext}${summaryBlock}${userBlock}`,
+      content: `${SYSTEM_PROMPT}\n\nEnabled lightweight skills:\n${enabledSkillPrompt(params.enabledSkillIds)}\n\nCRM tool context:\n${formatAgentContext(params.context)}${summaryBlock}${userBlock}`,
     },
-    ...messages.map(
-      (message): ChatMessage => ({
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: message.content,
-      }),
-    ),
+    ...params.messages.map((message): ChatMessage => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: message.content,
+    })),
   ]
 }
 
-async function compressOldestBatch(chatId: string, messages: DbMessage[]): Promise<DbMessage[]> {
-  if (messages.length === 0) return messages
-  const batch = messages.slice(0, Math.min(COMPRESS_BATCH, messages.length))
-  const rest = messages.slice(batch.length)
-  const transcript = batch.map((m) => `${m.role}: ${m.content}`).join("\n")
-  const prev = await getRollingSummary(chatId)
-  const merged = await mergeSummaries(prev, transcript)
-  await setRollingSummary(chatId, merged)
-  const ids = batch.map((m) => m.id)
-  await supabase.from("analytics_assistant_messages").delete().in("id", ids)
-  return rest
-}
-
-async function ensureWithinLimits(chatId: string): Promise<void> {
-  let rounds = 0
-  while (rounds < MAX_COMPRESS_ROUNDS) {
-    const messages = await listMessages(chatId)
-    if (!shouldCompress(messages)) break
-    await compressOldestBatch(chatId, messages)
-    rounds += 1
-  }
-}
-
-function fallbackReply(workspace: AnalyticsWorkspace | null) {
-  if (!workspace) {
-    return "I could not load your CRM workspace. Sync customer, survey, or email data and try again."
-  }
-
-  const action = workspace.action
-  return [
-    workspace.brief.headline,
-    workspace.brief.whyNow,
-    `Recommended action: ${action.title} (${Math.round(action.confidence * 100)}% confidence).`,
-    `Sources: ${action.citations.map((citation) => `${citation.label} - ${citation.detail}`).join("; ")}`,
-  ].join("\n")
+function fallbackReply(context: CRMAgentContext | null) {
+  if (!context) return "I could not load CRM data. Check Supabase configuration and try again."
+  const lines = [
+    `I inspected ${context.snapshot.customerCount} customers, ${context.snapshot.responseCount} survey responses, and ${context.snapshot.emailCount} saved emails.`,
+  ]
+  const pain = context.analyses.find((analysis) => analysis.type === "pain_points")?.result.painPoints?.[0]
+  const churn = context.analyses.find((analysis) => analysis.type === "churn_risk")?.result.atRiskCustomers?.[0]
+  if (pain) lines.push(`Top pain point: ${pain.theme} with ${pain.count} mention(s).`)
+  if (churn) lines.push(`Highest churn risk: ${churn.name}, score ${churn.riskScore}.`)
+  if (context.proposals[0]) lines.push(`Proposed action: ${context.proposals[0].title}. Review and approve before execution.`)
+  return lines.join("\n")
 }
 
 async function serializeChats(userId: string) {
@@ -330,225 +279,193 @@ async function serializeChats(userId: string) {
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser(request)
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const chatId = request.nextUrl.searchParams.get("chatId") || undefined
-    const workspace = await buildAnalyticsWorkspace(user)
+    const context = await buildCRMAgentContext(user, "current CRM overview", request)
     const chat = chatId ? await getChat(user.id, chatId) : await getLatestChat(user.id)
-    
+
     await cleanupEmptyChats(user.id, chat?.id)
-    
-    const chats = await serializeChats(user.id)
-    const messages = chat ? await listMessages(chat.id) : []
+
+    const [chats, messages] = await Promise.all([serializeChats(user.id), chat ? listMessages(chat.id) : Promise.resolve([])])
 
     return NextResponse.json({
       chats,
       activeChatId: chat?.id || null,
-      messages: messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        created_at: m.created_at,
+      messages: messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
       })),
-      workspace,
+      context,
+      workspace: context,
+      toolStatuses: context.statuses,
+      proposals: context.proposals,
+      skills: DEFAULT_AGENT_SKILLS,
     })
-  } catch (e) {
-    console.error("Assistant GET error:", e)
-    return NextResponse.json({ error: "Failed to load chat" }, { status: 500 })
+  } catch (error) {
+    console.error("Assistant GET error:", error)
+    return NextResponse.json({ error: "Failed to load CRM agent" }, { status: 500 })
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser(request)
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const body = (await request.json().catch(() => ({}))) as {
       content?: string
-      mode?: "chat" | "approve" | "refresh" | "new_chat"
+      mode?: "chat" | "execute_action" | "refresh" | "new_chat"
       chatId?: string
+      action?: CRMActionProposal
+      enabledSkills?: string[]
     }
 
-    const workspace = await buildAnalyticsWorkspace(user)
     const mode = body.mode || (body.content ? "chat" : "refresh")
 
     if (mode === "new_chat" || mode === "refresh") {
-      const chat = (await createChat(user.id, workspace)) || (await getLatestChat(user.id))
-      
+      const context = await buildCRMAgentContext(user, "current CRM overview", request)
+      const chat = mode === "new_chat" ? await createChat(user.id, "CRM agent session") : await resolveChat(user.id, body.chatId, "CRM agent session")
       await cleanupEmptyChats(user.id, chat?.id)
       const chats = await serializeChats(user.id)
+      const messages = chat ? await listMessages(chat.id) : []
 
       return NextResponse.json({
-        chat: chat
-          ? {
-              id: chat.id,
-              title: chat.title,
-              created_at: chat.created_at,
-              updated_at: chat.updated_at,
-            }
-          : null,
+        chat,
         activeChatId: chat?.id || null,
         chats,
-        messages: [],
-        workspace,
+        messages: messages.map((message) => ({ id: message.id, role: message.role, content: message.content, created_at: message.created_at })),
+        context,
+        workspace: context,
+        toolStatuses: context.statuses,
+        proposals: context.proposals,
+        skills: DEFAULT_AGENT_SKILLS,
       })
     }
 
-    if (mode === "approve") {
-      if (!workspace) {
-        return NextResponse.json({ error: "Workspace not available" }, { status: 404 })
+    if (mode === "execute_action") {
+      if (!body.action) return NextResponse.json({ error: "action is required" }, { status: 400 })
+      const result = await executeCRMAction(user, body.action, request)
+      const context = await buildCRMAgentContext(user, `execution result for ${body.action.title}`, request)
+      const chat = await resolveChat(user.id, body.chatId, "CRM agent session")
+
+      const confirmation = result.ok
+        ? `Completed action: ${body.action.title}. ${result.message}`
+        : `Action failed: ${body.action.title}. ${result.error}`
+
+      if (chat) {
+        await supabase.from("analytics_assistant_messages").insert({
+          user_id: user.id,
+          chat_id: chat.id,
+          role: "assistant",
+          content: confirmation,
+          created_at: new Date().toISOString(),
+        })
+        await touchChat(chat.id)
       }
 
-      const result = await executeWorkspaceAction(user, workspace.action, request)
-      if (!result.ok) {
-        return NextResponse.json({ error: result.error, needsCredentials: result.needsCredentials ?? false }, { status: 400 })
-      }
-
-      const chat = (await resolveChat(user.id, body.chatId, workspace)) || (await createChat(user.id, workspace))
-      if (!chat) {
-        return NextResponse.json({ error: "Failed to create chat" }, { status: 500 })
-      }
-
-      const confirmation = `Approved: ${result.message}.`
-      await supabase.from("analytics_assistant_messages").insert({
-        user_id: user.id,
-        chat_id: chat.id,
-        role: "assistant",
-        content: confirmation,
-        created_at: new Date().toISOString(),
-      })
-      await touchChat(chat.id)
-
-      const updatedWorkspace = await buildAnalyticsWorkspace(user)
       const chats = await serializeChats(user.id)
-
+      const messages = chat ? await listMessages(chat.id) : []
       return NextResponse.json({
         reply: confirmation,
-        workspace: updatedWorkspace,
         result,
+        context,
+        workspace: context,
+        toolStatuses: context.statuses,
+        proposals: context.proposals,
         chats,
-        activeChatId: chat.id,
+        activeChatId: chat?.id || null,
+        messages: messages.map((message) => ({ id: message.id, role: message.role, content: message.content, created_at: message.created_at })),
       })
     }
 
     const content = typeof body.content === "string" ? body.content.trim() : ""
-    if (!content) {
-      return NextResponse.json({ error: "content is required for chat messages" }, { status: 400 })
-    }
+    if (!content) return NextResponse.json({ error: "content is required for chat messages" }, { status: 400 })
 
-    const chat = (await resolveChat(user.id, body.chatId, workspace)) || (await createChat(user.id, workspace))
-    if (!chat) {
-      return NextResponse.json({ error: "Failed to create chat" }, { status: 500 })
-    }
+    const context = await buildCRMAgentContext(user, content, request)
+    const firstTitle = content.length > 8 ? content : context.proposals[0]?.title || "CRM agent session"
+    const chat = await resolveChat(user.id, body.chatId, firstTitle)
+    if (!chat) return NextResponse.json({ error: "Failed to create chat" }, { status: 500 })
 
     await ensureWithinLimits(chat.id)
 
-    const now = new Date().toISOString()
-    const { error: insertUserErr } = await supabase.from("analytics_assistant_messages").insert({
+    await supabase.from("analytics_assistant_messages").insert({
       user_id: user.id,
       chat_id: chat.id,
       role: "user",
       content,
-      created_at: now,
+      created_at: new Date().toISOString(),
     })
-    if (insertUserErr) {
-      console.error("insert user message:", insertUserErr)
-      return NextResponse.json({ error: "Failed to save message" }, { status: 500 })
-    }
-
-    await touchChat(chat.id)
-    await ensureWithinLimits(chat.id)
+    await touchChat(chat.id, chat.title === "CRM agent session" ? firstTitle : undefined)
 
     const rollingSummary = await getRollingSummary(chat.id)
     const messages = await listMessages(chat.id)
-    const inputMessages = buildChatMessages(rollingSummary, messages, user.name, workspace)
+    const inputMessages = buildChatMessages({
+      rollingSummary,
+      messages,
+      userName: user.name,
+      context,
+      enabledSkillIds: body.enabledSkills,
+    })
 
     let reply = ""
     try {
-      if (!process.env.OPENROUTER_KEY) {
-        throw new Error("OPENROUTER_KEY is missing")
-      }
-
-      const response = await client.chat.completions.create({
-        model: MODEL,
-        messages: inputMessages,
-        temperature: 0.5,
-      })
-      reply = (response.choices[0]?.message?.content || "").trim()
+      if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
+      const response = await client.chat.completions.create({ model: MODEL, messages: inputMessages, temperature: 0.35 })
+      reply = response.choices[0]?.message?.content?.trim() || ""
     } catch (error) {
       console.warn("Assistant model failed, using fallback:", error)
     }
 
-    if (!reply) {
-      reply = fallbackReply(workspace)
-    }
+    if (!reply) reply = fallbackReply(context)
 
-    const { error: insertAsstErr } = await supabase.from("analytics_assistant_messages").insert({
+    await supabase.from("analytics_assistant_messages").insert({
       user_id: user.id,
       chat_id: chat.id,
       role: "assistant",
       content: reply,
       created_at: new Date().toISOString(),
     })
-    if (insertAsstErr) {
-      console.error("insert assistant message:", insertAsstErr)
-    }
 
     await touchChat(chat.id)
     await ensureWithinLimits(chat.id)
 
-    const updated = await listMessages(chat.id)
-    const chats = await serializeChats(user.id)
-    const updatedChat = await getChat(user.id, chat.id)
+    const [updatedMessages, chats, updatedChat] = await Promise.all([listMessages(chat.id), serializeChats(user.id), getChat(user.id, chat.id)])
 
     return NextResponse.json({
       reply,
-      messages: updated.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        created_at: m.created_at,
+      messages: updatedMessages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
       })),
       chats,
       activeChatId: chat.id,
-      chat: updatedChat
-        ? {
-            id: updatedChat.id,
-            title: updatedChat.title,
-            created_at: updatedChat.created_at,
-            updated_at: updatedChat.updated_at,
-          }
-        : null,
-      workspace,
+      chat: updatedChat,
+      context,
+      workspace: context,
+      toolStatuses: context.statuses,
+      proposals: context.proposals,
+      skills: DEFAULT_AGENT_SKILLS,
     })
   } catch (error) {
-    console.error("SleekCRM assistant error:", error)
-    return NextResponse.json({ error: "SleekCRM assistant failed to respond" }, { status: 500 })
+    console.error("SleekCRM agent error:", error)
+    return NextResponse.json({ error: "SleekCRM agent failed to respond" }, { status: 500 })
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
     const user = await getCurrentUser(request)
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const chatId = request.nextUrl.searchParams.get("chatId")
-    if (!chatId) {
-      return NextResponse.json({ error: "chatId required" }, { status: 400 })
-    }
+    if (!chatId) return NextResponse.json({ error: "chatId required" }, { status: 400 })
 
-    await supabase
-      .from("analytics_assistant_chats")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("id", chatId)
-
+    await supabase.from("analytics_assistant_chats").delete().eq("user_id", user.id).eq("id", chatId)
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error("Assistant DELETE error:", error)
