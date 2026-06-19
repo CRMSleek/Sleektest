@@ -872,7 +872,7 @@ export function proposeActions(context: {
   if (intent.smallTalkOnly) return []
 
   const proposals: CRMActionProposal[] = []
-  const promptKey = hashObject([context.prompt, now]).slice(0, 8)
+  const promptKey = hashObject([context.prompt.toLowerCase().replace(/\s+/g, " ").trim()]).slice(0, 8)
   const painAnalysis = context.analyses.find((analysis) => analysis.type === "pain_points")
   const churnAnalysis = context.analyses.find((analysis) => analysis.type === "churn_risk")
   const opportunityAnalysis = context.analyses.find((analysis) => analysis.type === "opportunities")

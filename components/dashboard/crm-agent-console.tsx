@@ -49,6 +49,17 @@ type AgentMessage = {
   created_at?: string
 }
 
+type UploadedAttachment = {
+  id: string
+  name: string
+  rows: number
+  customerCreated: number
+  customerUpdated: number
+  emailsSaved: number
+  emailsSkipped: number
+  errors: string[]
+}
+
 type ChatItem = {
   id: string
   title: string
@@ -150,6 +161,117 @@ function parseJsonOrNull(value: string) {
   } catch {
     return null
   }
+}
+
+type StoredProposalState = {
+  proposals: AgentProposal[]
+  resolvedIds: string[]
+}
+
+const PROPOSAL_STORE_KEY = "sleekcrm-chat-proposals-v1"
+const LEGACY_RESOLVED_PROPOSALS_KEY = "sleekcrm-resolved-proposals"
+const NO_CHAT_PROPOSAL_KEY = "__no_chat__"
+
+function proposalChatKey(chatId?: string | null) {
+  return chatId || NO_CHAT_PROPOSAL_KEY
+}
+
+function encodeMessageWithAttachments(content: string, attachments: UploadedAttachment[]) {
+  if (attachments.length === 0) return content
+  return [
+    `<!--sleekcrm-attachments:${JSON.stringify(attachments)}-->`,
+    content,
+    "",
+    "Uploaded CRM data is already imported into Supabase. Use MCP tools to query the new records before answering.",
+  ].join("\n")
+}
+
+function parseMessageAttachments(content: string): { text: string; attachments: UploadedAttachment[] } {
+  const match = content.match(/^<!--sleekcrm-attachments:([\s\S]*?)-->\n?/)
+  if (!match) return { text: content, attachments: [] }
+  const parsed = parseJsonOrNull(match[1])
+  return {
+    text: content.replace(match[0], "").trim(),
+    attachments: Array.isArray(parsed) ? parsed : [],
+  }
+}
+
+function readResolvedProposalIds() {
+  if (typeof window === "undefined") return new Set<string>()
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LEGACY_RESOLVED_PROPOSALS_KEY) || "[]")
+    return new Set<string>(Array.isArray(parsed) ? parsed : [])
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function readProposalStore(): Record<string, StoredProposalState> {
+  if (typeof window === "undefined") return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PROPOSAL_STORE_KEY) || "{}")
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeProposalStore(store: Record<string, StoredProposalState>) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(PROPOSAL_STORE_KEY, JSON.stringify(store))
+}
+
+function normalizeProposal(proposal: AgentProposal): AgentProposal {
+  return { ...proposal, status: proposal.status || "proposed" }
+}
+
+function visibleProposals(proposals: AgentProposal[], resolvedIds: Set<string>) {
+  return proposals
+    .map(normalizeProposal)
+    .filter((proposal) => !resolvedIds.has(proposal.id) && proposal.status !== "completed" && proposal.status !== "rejected")
+}
+
+function readStoredProposalState(chatId?: string | null): { proposals: AgentProposal[]; resolvedIds: Set<string> } {
+  const store = readProposalStore()
+  const key = proposalChatKey(chatId)
+  const stored = store[key]
+  const resolvedIds = new Set<string>(Array.isArray(stored?.resolvedIds) ? stored.resolvedIds : [])
+
+  if (!stored) {
+    readResolvedProposalIds().forEach((id) => resolvedIds.add(id))
+  }
+
+  return {
+    proposals: visibleProposals(Array.isArray(stored?.proposals) ? stored.proposals : [], resolvedIds),
+    resolvedIds,
+  }
+}
+
+function writeStoredProposalState(
+  chatId: string | null | undefined,
+  state: { proposals: AgentProposal[]; resolvedIds: Set<string> },
+) {
+  const store = readProposalStore()
+  const key = proposalChatKey(chatId)
+  store[key] = {
+    proposals: visibleProposals(state.proposals, state.resolvedIds),
+    resolvedIds: Array.from(state.resolvedIds).slice(-300),
+  }
+  writeProposalStore(store)
+}
+
+function mergeProposalLists(existing: AgentProposal[], incoming: AgentProposal[], resolvedIds: Set<string>) {
+  const byId = new Map<string, AgentProposal>()
+
+  for (const proposal of visibleProposals(existing, resolvedIds)) {
+    byId.set(proposal.id, proposal)
+  }
+
+  for (const proposal of visibleProposals(incoming, resolvedIds)) {
+    if (!byId.has(proposal.id)) byId.set(proposal.id, proposal)
+  }
+
+  return Array.from(byId.values())
 }
 
 function parseAssistantMessage(content: string): { text: string; inlineAction: InlineAction | null } {
@@ -559,12 +681,32 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   const [composerFocused, setComposerFocused] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [importFileName, setImportFileName] = useState("")
+  const [pendingAttachments, setPendingAttachments] = useState<UploadedAttachment[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { enabled, toggle } = useEnabledSkills(skills)
 
   const snapshot = context?.snapshot
+
+  const updateCurrentChatProposals = (updater: (current: AgentProposal[]) => AgentProposal[]) => {
+    setProposals((current) => {
+      const state = readStoredProposalState(activeChatId)
+      const next = updater(current)
+      writeStoredProposalState(activeChatId, { proposals: next, resolvedIds: state.resolvedIds })
+      return next
+    })
+  }
+
+  const rememberResolvedProposal = (proposalId: string) => {
+    setProposals((current) => {
+      const state = readStoredProposalState(activeChatId)
+      state.resolvedIds.add(proposalId)
+      const next = current.filter((proposal) => proposal.id !== proposalId)
+      writeStoredProposalState(activeChatId, { proposals: next, resolvedIds: state.resolvedIds })
+      return next
+    })
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -581,11 +723,19 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     if (input.startsWith("/") && !input.includes(" ")) setCommandOpen(true)
   }, [input])
 
-  const applyResponse = (json: AssistantResponse) => {
+  const applyResponse = (json: AssistantResponse, proposalMode: "load" | "merge" | "ignore" = "load") => {
     const nextContext = json.context || json.workspace
     const nextProposals = json.proposals || json.context?.proposals || json.workspace?.proposals
+    const responseChatId = json.activeChatId !== undefined ? json.activeChatId : activeChatId
     if (nextContext) setContext(nextContext)
-    if (nextProposals) setProposals(nextProposals.map((proposal) => ({ ...proposal, status: proposal.status || "proposed" })))
+    if (proposalMode === "merge" && nextProposals) {
+      const state = readStoredProposalState(responseChatId)
+      const merged = mergeProposalLists(state.proposals, nextProposals, state.resolvedIds)
+      writeStoredProposalState(responseChatId, { proposals: merged, resolvedIds: state.resolvedIds })
+      setProposals(merged)
+    } else if (proposalMode === "load" && responseChatId !== undefined) {
+      setProposals(readStoredProposalState(responseChatId).proposals)
+    }
     if (json.chats) setChats(json.chats)
     if (json.activeChatId !== undefined) setActiveChatId(json.activeChatId || null)
     if (json.skills) setSkills(json.skills)
@@ -600,7 +750,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const response = await fetch(url)
       const json = (await response.json()) as AssistantResponse
       if (!response.ok) throw new Error(json.error || "Failed to load agent")
-      applyResponse(json)
+      applyResponse(json, "load")
       setStatus("")
     } catch (error) {
       console.error("CRM agent load failed:", error)
@@ -625,7 +775,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       })
       const json = (await response.json()) as AssistantResponse
       if (!response.ok) throw new Error(json.error || "Failed to create chat")
-      applyResponse(json)
+      applyResponse(json, "load")
       setMessages([WELCOME])
       setStatus("")
     } catch (error) {
@@ -638,9 +788,11 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
 
   const sendChat = async (content: string) => {
     const trimmed = content.trim()
-    if (!trimmed || sending) return
+    if ((!trimmed && pendingAttachments.length === 0) || sending || importing) return
 
-    const optimistic: AgentMessage = { id: crypto.randomUUID(), role: "user", content: trimmed, created_at: new Date().toISOString() }
+    const attachments = pendingAttachments
+    const messageContent = encodeMessageWithAttachments(trimmed || "I uploaded CRM data. Analyze it and update the CRM as needed.", attachments)
+    const optimistic: AgentMessage = { id: crypto.randomUUID(), role: "user", content: messageContent, created_at: new Date().toISOString() }
     const streamingId = crypto.randomUUID()
     setMessages((current) => [
       ...current.filter((message) => message.id !== "welcome"),
@@ -648,6 +800,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       { id: streamingId, role: "assistant", content: "", created_at: new Date().toISOString() },
     ])
     setInput("")
+    setPendingAttachments([])
     setCommandOpen(false)
     setSending(true)
     setStatus("Working")
@@ -656,7 +809,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const response = await fetch("/api/analytics/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: trimmed, mode: "chat", chatId: activeChatId, enabledSkills: enabled, stream: true }),
+        body: JSON.stringify({ content: messageContent, mode: "chat", chatId: activeChatId, enabledSkills: enabled, stream: true }),
       })
 
       if (!response.ok) {
@@ -666,7 +819,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
 
       if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
         const json = (await response.json()) as AssistantResponse
-        applyResponse(json)
+        applyResponse(json, "merge")
         setStatus("")
         return
       }
@@ -687,7 +840,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
           if (!parsed) continue
 
           if (parsed.event === "context") {
-            applyResponse(parsed.payload)
+            applyResponse(parsed.payload, "merge")
           }
 
           if (parsed.event === "delta" && parsed.payload.delta) {
@@ -699,7 +852,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
           }
 
           if (parsed.event === "done") {
-            applyResponse(parsed.payload)
+            applyResponse(parsed.payload, "merge")
           }
         }
       }
@@ -707,6 +860,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       setStatus("")
     } catch (error) {
       console.error("CRM agent send failed:", error)
+      setPendingAttachments((current) => (current.length ? current : attachments))
       setMessages((current) => [
         ...current.filter((message) => message.id !== streamingId),
         { id: crypto.randomUUID(), role: "assistant", content: "CRM agent failed to respond. Check model/API configuration.", created_at: new Date().toISOString() },
@@ -720,7 +874,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   const executeProposal = async (proposal: AgentProposal) => {
     setSending(true)
     setStatus(`Executing: ${proposal.title}`)
-    setProposals((current) => current.map((item) => (item.id === proposal.id ? { ...proposal, status: "approved" } : item)))
+    updateCurrentChatProposals((current) => current.map((item) => (item.id === proposal.id ? { ...proposal, status: "approved" } : item)))
     try {
       const response = await fetch("/api/analytics/assistant", {
         method: "POST",
@@ -729,12 +883,12 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       })
       const json = (await response.json()) as AssistantResponse
       if (!response.ok) throw new Error(json.error || "Action failed")
-      applyResponse(json)
-      setProposals((current) => current.map((item) => (item.id === proposal.id ? { ...item, status: "completed" } : item)))
+      rememberResolvedProposal(proposal.id)
+      applyResponse(json, "ignore")
       setStatus("")
     } catch (error) {
       console.error("Action execution failed:", error)
-      setProposals((current) => current.map((item) => (item.id === proposal.id ? { ...item, status: "proposed" } : item)))
+      updateCurrentChatProposals((current) => current.map((item) => (item.id === proposal.id ? { ...item, status: "proposed" } : item)))
       setStatus("Approved action failed")
     } finally {
       setSending(false)
@@ -742,11 +896,11 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   }
 
   const rejectProposal = (proposalId: string) => {
-    setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? { ...proposal, status: "rejected" } : proposal)))
+    rememberResolvedProposal(proposalId)
   }
 
   const saveEditedProposal = (proposal: AgentProposal) => {
-    setProposals((current) => current.map((item) => (item.id === proposal.id ? proposal : item)))
+    updateCurrentChatProposals((current) => current.map((item) => (item.id === proposal.id ? proposal : item)))
   }
 
   const deleteChat = async (chatId: string) => {
@@ -754,6 +908,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     if (activeChatId === chatId) {
       setActiveChatId(null)
       setMessages([WELCOME])
+      setProposals([])
     }
     await fetch(`/api/analytics/assistant?chatId=${encodeURIComponent(chatId)}`, { method: "DELETE" }).catch(() => null)
   }
@@ -769,16 +924,18 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || "Import failed")
 
-      const summary = [
-        `Imported ${data.rows || 0} row(s) from ${file.name}.`,
-        `Customers: ${data.customers?.created || 0} created, ${data.customers?.updated || 0} updated.`,
-        `Emails: ${data.emails?.saved?.length || 0} saved for analysis, ${data.emails?.skipped || 0} already existed.`,
-      ].join("\n")
+      const attachment: UploadedAttachment = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        rows: data.rows || 0,
+        customerCreated: data.customers?.created || 0,
+        customerUpdated: data.customers?.updated || 0,
+        emailsSaved: data.emails?.saved?.length || 0,
+        emailsSkipped: data.emails?.skipped || 0,
+        errors: [...(data.customers?.errors || []), ...(data.emails?.errors || [])].slice(0, 5),
+      }
 
-      setMessages((current) => [
-        ...current.filter((message) => message.id !== "welcome"),
-        { id: crypto.randomUUID(), role: "assistant", content: summary, created_at: new Date().toISOString() },
-      ])
+      setPendingAttachments((current) => [...current, attachment])
       await loadAgent(activeChatId || undefined)
       setStatus("")
     } catch (error: any) {
@@ -914,7 +1071,8 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
           <ScrollArea className="min-h-0 flex-1">
             <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6">
               {messages.map((message) => {
-                const parsed = message.role === "assistant" ? parseAssistantMessage(message.content) : { text: message.content, inlineAction: null }
+                const messageParts = parseMessageAttachments(message.content)
+                const parsed = message.role === "assistant" ? parseAssistantMessage(messageParts.text) : { text: messageParts.text, inlineAction: null }
 
                 return (
                   <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -927,6 +1085,16 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                     >
                       {message.role === "assistant" ? (
                         <>
+                          {messageParts.attachments.length ? (
+                            <div className="mb-3 flex flex-wrap gap-2">
+                              {messageParts.attachments.map((attachment) => (
+                                <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
+                                  <FileUp className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="truncate">{attachment.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                           {parsed.text ? (
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
@@ -964,7 +1132,19 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                           ) : null}
                         </>
                       ) : (
-                        <p>{message.content}</p>
+                        <>
+                          {messageParts.attachments.length ? (
+                            <div className="mb-3 flex flex-wrap gap-2">
+                              {messageParts.attachments.map((attachment) => (
+                                <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md bg-primary-foreground/15 px-2.5 py-1.5 text-xs">
+                                  <FileUp className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="truncate">{attachment.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <p>{parsed.text}</p>
+                        </>
                       )}
                     </div>
                   </div>
@@ -1041,13 +1221,33 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                     }
                   }}
                   placeholder="Ask about customers, surveys, emails, churn risk, feature requests, or this week's focus..."
-                  className="min-h-[72px] resize-none border-0 bg-transparent px-4 py-4 pb-16 shadow-none focus-visible:ring-0"
+                  className={`min-h-[72px] resize-none border-0 bg-transparent px-4 py-4 shadow-none focus-visible:ring-0 ${
+                    pendingAttachments.length || importFileName ? "pb-28" : "pb-16"
+                  }`}
                 />
 
-                {importFileName ? (
-                  <div className="absolute bottom-14 left-3 right-3 flex min-w-0 items-center gap-2 rounded-md border bg-muted/70 px-3 py-2 text-xs text-muted-foreground">
-                    <FileUp className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{importing ? `Importing ${importFileName}` : importFileName}</span>
+                {importFileName || pendingAttachments.length ? (
+                  <div className="absolute bottom-14 left-3 right-3 flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-muted/70 px-3 py-2 text-xs text-muted-foreground">
+                    {importing && importFileName ? (
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                        <span className="truncate">Importing {importFileName}</span>
+                      </span>
+                    ) : null}
+                    {pendingAttachments.map((attachment) => (
+                      <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2 py-1">
+                        <FileUp className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{attachment.name}</span>
+                        <button
+                          type="button"
+                          className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          onClick={() => setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                          aria-label={`Remove ${attachment.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
                   </div>
                 ) : null}
 
@@ -1078,14 +1278,14 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                       <Command className="h-4 w-4" />
                     </Button>
                     <span className="hidden truncate px-2 text-xs text-muted-foreground sm:inline">
-                      {importing ? "Importing CRM data" : "Shift+Enter for newline"}
+                      {pendingAttachments.length ? "File attached to next message" : importing ? "Importing CRM data" : "Shift+Enter for newline"}
                     </span>
                   </div>
 
                 <Button
                   onClick={() => void sendChat(input)}
-                  disabled={sending || !input.trim()}
-                    className="h-8 px-3 transition-all hover:-translate-y-0.5"
+                  disabled={sending || importing || (!input.trim() && pendingAttachments.length === 0)}
+                  className="h-8 px-3 transition-all hover:-translate-y-0.5"
                 >
                   {sending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
