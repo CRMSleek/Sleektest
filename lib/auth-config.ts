@@ -1,5 +1,5 @@
 import GoogleProvider from "next-auth/providers/google"
-import { supabase } from "./supabase/client"
+import { supabaseAdmin as supabase } from "./supabase/server"
 
 export const authOptions = {
   providers: [
@@ -83,8 +83,6 @@ export const authOptions = {
     async session({ session, token }: any) {
       session.user.id = token.userId as string
       session.user.business = token.business
-      session.accessToken = token.accessToken
-      session.refreshToken = token.refreshToken
       return session
     },
   },

@@ -4,14 +4,36 @@ import { useEffect } from "react"
 import { useAuth } from "@/components/auth-provider"
 import Link from "next/link"
 import Image from "next/image"
+import { usePathname } from "next/navigation"
+import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
-import { BarChart3, Bot, Users, FileText, Settings, LogOut, Mail } from "lucide-react"
+import {
+  BarChart3,
+  Bot,
+  FileText,
+  HeartHandshake,
+  LogOut,
+  Mail,
+  Settings,
+  Users,
+} from "lucide-react"
 import { useTheme } from "next-themes"
 import logo from "../../public/logo.png"
+
+const navigationItems = [
+  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { href: "/dashboard/agent", label: "Agent", icon: Bot },
+  { href: "/dashboard/customers", label: "Relationships", icon: Users },
+  { href: "/dashboard/communications", label: "Communications", icon: Mail },
+  { href: "/dashboard/surveys", label: "Surveys and Forms", icon: FileText },
+  { href: "/dashboard/fundraising", label: "Fundraising", icon: HeartHandshake },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth()
   const { setTheme } = useTheme()
+  const pathname = usePathname()
 
   useEffect(() => {
     const hydrateThemePreference = async () => {
@@ -72,54 +94,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
         <aside className="w-64 bg-card border-r flex-shrink-0">
-          <nav className="p-6 space-y-2">
-            <Link
-              href="/dashboard"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <BarChart3 className="h-5 w-5" />
-              <span>Dashboard</span>
-            </Link>
-            <Link
-              href="/dashboard/agent"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <Bot className="h-5 w-5" />
-              <span>Agent</span>
-            </Link>
-            <Link
-              href="/dashboard/surveys"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <FileText className="h-5 w-5" />
-              <span>Surveys</span>
-            </Link>
-            <Link
-              href="/dashboard/email"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <Mail className="h-5 w-5" />
-              <span>Emails</span>
-            </Link>
-            <Link
-              href="/dashboard/customers"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <Users className="h-5 w-5" />
-              <span>Relationships</span>
-            </Link>
-            <Link
-              href="/dashboard/settings"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-            >
-              <Settings className="h-5 w-5" />
-              <span>Settings</span>
-            </Link>
+          <nav className="p-4 space-y-1">
+            {navigationItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="flex items-center space-x-3 rounded-md px-3 py-2 text-sm hover:bg-muted transition-colors"
+              >
+                <item.icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </Link>
+            ))}
           </nav>
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto min-h-0 bg-background">{children}</main>
+        <main className="flex-1 overflow-auto min-h-0 bg-background">
+          <motion.div
+            key={pathname}
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45, ease: "easeOut" }}
+            className="min-h-full"
+          >
+            {children}
+          </motion.div>
+        </main>
       </div>
     </div>
   )

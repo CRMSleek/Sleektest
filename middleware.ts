@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
-import { verifyToken } from "./lib/supabase/auth"
+import { verifyToken } from "./lib/auth-token"
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
@@ -16,8 +16,6 @@ export async function middleware(request: NextRequest) {
     }
 
     const payload = await verifyToken(token)
-    console.log("Middleware - Token payload:", payload)
-    
     if (!payload) {
       return NextResponse.redirect(new URL("/login", request.url))
     }

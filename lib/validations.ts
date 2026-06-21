@@ -29,7 +29,19 @@ export const surveySchema = z.object({
     .min(1, "At least one question is required"),
 })
 
-export const relationshipTypes = ["customer", "lead", "partner", "vendor", "supplier", "contractor", "affiliate", "other"] as const
+export const relationshipTypes = [
+  "customer",
+  "lead",
+  "partner",
+  "vendor",
+  "supplier",
+  "contractor",
+  "affiliate",
+  "donor",
+  "volunteer",
+  "at-risk",
+  "other",
+] as const
 
 export const customerSchema = z.object({
   name: z.string().min(1, "Name is required"),

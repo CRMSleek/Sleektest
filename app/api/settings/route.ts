@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { verifyPassword, hashPassword, getCurrentUser } from "@/lib/supabase/auth"
+import { writeAuditLog } from "@/lib/audit-log"
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,7 +11,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-  if (!verifyPassword(currentPassword, user.password)) {
+  if (!(await verifyPassword(currentPassword, user.password))) {
       return NextResponse.json({ error: "Current password is incorrect" }, { status: 400 })
   }
 
@@ -22,6 +23,15 @@ export async function POST(request: NextRequest) {
       .eq('id', user.id)
 
     if (error) throw error
+
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business?.id ?? null,
+      action: "user.password_changed",
+      tableName: "users",
+      rowId: user.id,
+      request,
+    })
 
     return NextResponse.json({
       status: "success",

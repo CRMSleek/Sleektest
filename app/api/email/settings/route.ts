@@ -1,6 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
+import { encryptSecret, hasComplianceEncryptionKey } from "@/lib/crypto"
+import { isRegulatedMode } from "@/lib/compliance"
+import { writeAuditLog } from "@/lib/audit-log"
 
 export async function GET(request: NextRequest) {
   try {
@@ -81,9 +84,20 @@ export async function POST(request: NextRequest) {
       .eq("user_id", user.id)
       .maybeSingle()
 
-    const isNew = !existing
-    const passwordToUse = app_password != null && String(app_password).trim() !== ""
+    const incomingPassword = app_password != null && String(app_password).trim() !== ""
       ? String(app_password)
+      : ""
+    const regulatedMode = isRegulatedMode(user.business?.compliance_mode)
+
+    if (regulatedMode && incomingPassword && !hasComplianceEncryptionKey()) {
+      return NextResponse.json(
+        { error: "COMPLIANCE_ENCRYPTION_KEY is required before saving email credentials in HIPAA/FERPA mode" },
+        { status: 500 }
+      )
+    }
+
+    const passwordToUse = incomingPassword
+      ? encryptSecret(incomingPassword)
       : (existing?.app_password ?? "")
 
     if (!passwordToUse) {
@@ -127,6 +141,19 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Failed to save email settings" }, { status: 500 })
       }
     }
+
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business?.id ?? null,
+      action: "email_settings.saved",
+      tableName: "email_settings",
+      rowId: existing?.id ?? null,
+      metadata: {
+        changedPassword: Boolean(incomingPassword),
+        regulatedMode,
+      },
+      request,
+    })
 
     return NextResponse.json({ success: true })
   } catch (e) {

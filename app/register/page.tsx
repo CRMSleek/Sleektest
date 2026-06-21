@@ -19,7 +19,9 @@ export default function RegisterPage() {
     email: "",
     password: "",
     businessName: "",
+    complianceMode: "standard",
   })
+  const [regulatedData, setRegulatedData] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -36,8 +38,9 @@ export default function RegisterPage() {
     setLoading(true)
     setError("")
   
-    if (formData.password.length < 6) {
-      setError("Password must be at least 6 characters long")
+    const minimumPasswordLength = regulatedData ? 12 : 8
+    if (formData.password.length < minimumPasswordLength) {
+      setError(`Password must be at least ${minimumPasswordLength} characters long`)
       setLoading(false)
       return
     }
@@ -46,6 +49,7 @@ export default function RegisterPage() {
       const payload = {
         ...formData,
         businessName: formData.businessName || formData.name + "'s Business",
+        complianceMode: regulatedData ? formData.complianceMode : "standard",
       }
     
       const response = await fetch("/api/auth/register", {
@@ -257,6 +261,40 @@ export default function RegisterPage() {
                       className="pl-10 bg-gray-700/50 border-gray-600 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-blue-500 focus:bg-gray-700"
                     />
                   </div>
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.85, duration: 0.5 }}
+                  className="space-y-3 rounded-lg border border-gray-700 bg-gray-900/50 p-4"
+                >
+                  <label className="flex items-center gap-3 text-sm font-medium text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={regulatedData}
+                      onChange={(e) => {
+                        setRegulatedData(e.target.checked)
+                        setFormData({
+                          ...formData,
+                          complianceMode: e.target.checked ? "hipaa" : "standard",
+                        })
+                      }}
+                      className="h-4 w-4 rounded border-gray-600 bg-gray-700"
+                    />
+                    Store HIPAA or FERPA regulated data
+                  </label>
+                  {regulatedData && (
+                    <select
+                      value={formData.complianceMode}
+                      onChange={(e) => setFormData({ ...formData, complianceMode: e.target.value })}
+                      className="w-full rounded-md border border-gray-600 bg-gray-700 px-3 py-2 text-white"
+                    >
+                      <option value="hipaa">HIPAA</option>
+                      <option value="ferpa">FERPA</option>
+                      <option value="hipaa_ferpa">HIPAA + FERPA</option>
+                    </select>
+                  )}
                 </motion.div>
 
                 {error && (

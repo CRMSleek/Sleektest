@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { BarChart3, Bot, FileText, Home, Settings, Users } from "lucide-react"
+import { Bot, FileText, HeartHandshake, Home, Mail, Settings, Users } from "lucide-react"
 
 const items = [
   {
@@ -22,14 +22,19 @@ const items = [
     icon: Users,
   },
   {
-    name: "Surveys",
+    name: "Communications",
+    href: "/dashboard/communications",
+    icon: Mail,
+  },
+  {
+    name: "Surveys and Forms",
     href: "/dashboard/surveys",
     icon: FileText,
   },
   {
-    name: "Analytics",
-    href: "/dashboard/analytics",
-    icon: BarChart3,
+    name: "Fundraising",
+    href: "/dashboard/fundraising",
+    icon: HeartHandshake,
   },
   {
     name: "Settings",

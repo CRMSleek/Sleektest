@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import OpenAI from "openai"
 import { getCurrentUser } from "@/lib/supabase/auth"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import {
   CRM_OPENAI_TOOLS,
   DEFAULT_AGENT_SKILLS,
@@ -31,8 +31,8 @@ You are SleekCRM Agent, an approval-gated CRM operator.
 
 Core loop:
 1. Investigate Supabase CRM data through MCP tool calls.
-2. Form grounded insights from customers, survey responses, saved emails, and CRM records.
-3. Recommend concrete CRM tasks with reasoning and evidence.
+2. Form grounded insights from customers, custom objects, dynamic records, engagement events, surveys, forms, emails, SMS scaffolds, donations, events, automations, reports, integrations, and settings where permitted.
+3. Recommend concrete CRM tasks, draft messages, draft reports, draft automations, donor follow-ups, event follow-ups, and record updates with reasoning and evidence.
 4. Ask for approval before external or destructive action.
 5. After approval, summarize execution result.
 
@@ -46,6 +46,7 @@ Rules:
 - Distinguish insight, evidence, proposed action, and next approval step.
 - If cached analysis was used, mention that it came from the recent Supabase analysis cache.
 - If evidence is thin, say what data is missing and propose the smallest next data-gathering task.
+- Do not claim HIPAA or FERPA compliance. Say compliance-readiness unless legal, deployment, policy, and contract controls are verified outside the app.
 `.trim()
 
 type DbChat = {

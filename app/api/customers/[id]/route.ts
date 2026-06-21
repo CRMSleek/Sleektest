@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
+import { customerSchema } from "@/lib/validations"
+import { writeAuditLog } from "@/lib/audit-log"
 
 type RouteContext = { params: Promise<{ id: string }> }
 
@@ -29,6 +31,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       .from('survey_responses')
       .select('id, submitted_at, answers, survey_id')
       .eq('customer_id', id)
+      .eq('business_id', user.business.id)
       .order('submitted_at', { ascending: false })
 
     let responsesWithTitles: any[] = []
@@ -56,6 +59,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       location: customer.location,
       age: customer.age,
       notes: customer.notes,
+      relationship_type: customer.relationship_type || "customer",
       createdAt: customer.created_at,
       responses: responsesWithTitles,
     }
@@ -75,19 +79,29 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     }
 
     const body = await request.json()
+    const validatedData = customerSchema.partial().parse(body)
     const { id } = await context.params
 
     const { data: customer, error } = await supabase
       .from('customers')
-      .update(body)
+      .update(validatedData)
       .eq('id', id)
       .eq('business_id', user.business.id)
-      .select('id, name, email, location, age, created_at')
+      .select('id, name, email, location, age, relationship_type, created_at')
       .single()
 
     if (error || !customer) {
       return NextResponse.json({ error: "Customer not found" }, { status: 404 })
     }
+
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business.id,
+      action: "customer.updated",
+      tableName: "customers",
+      rowId: id,
+      request,
+    })
 
     const normalized = {
       id: customer.id,
@@ -95,6 +109,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       email: customer.email,
       location: customer.location,
       age: customer.age,
+      relationship_type: customer.relationship_type || "customer",
       createdAt: customer.created_at,
       responses: [],
     }
@@ -124,6 +139,15 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     if (error) {
       return NextResponse.json({ error: "Customer not found" }, { status: 404 })
     }
+
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business.id,
+      action: "customer.deleted",
+      tableName: "customers",
+      rowId: id,
+      request,
+    })
 
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import * as XLSX from "xlsx"
 import { getCurrentUser } from "@/lib/supabase/auth"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { saveEmailsForAnalysis, type InboxEmailForAnalysis } from "@/lib/email-analysis-selection"
 
 export const runtime = "nodejs"

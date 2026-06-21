@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { verifyPassword, generateToken, findUserByEmail } from "@/lib/supabase/auth"
-import nodemailer from "nodemailer"
+import { authCookieOptions, verifyPassword, generateToken, findUserByEmail } from "@/lib/supabase/auth"
+import { writeAuditLog } from "@/lib/audit-log"
 
 
 export async function POST(request: NextRequest) {
@@ -27,13 +27,6 @@ export async function POST(request: NextRequest) {
 
     const token = await generateToken(user.id)
 
-    const transporter = nodemailer.createTransport({
-      auth: {
-        user: user.email,
-        pass: user.password,
-      },
-    });
-
     const response = NextResponse.json({
       user: {
         id: user.id,
@@ -45,13 +38,16 @@ export async function POST(request: NextRequest) {
 
     
 
-    response.cookies.set("auth-token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business?.id ?? null,
+      action: "user.login",
+      tableName: "users",
+      rowId: user.id,
+      request,
     })
 
+    response.cookies.set("auth-token", token, authCookieOptions)
 
     return response
   } catch (error) {

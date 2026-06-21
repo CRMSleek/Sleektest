@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase/client"
-import { getCurrentUser } from "@/lib/supabase/auth"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
+import { authCookieOptions, getCurrentUser } from "@/lib/supabase/auth"
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,7 +12,6 @@ export async function POST(request: NextRequest) {
     const userId = user.id
 
     await supabase.from("analytics_assistant_messages").delete().eq("user_id", userId)
-    await supabase.from("analytics_assistant_context").delete().eq("user_id", userId)
 
     // Delete in order to respect foreign key constraints
     // Even though CASCADE is set up, we'll do it explicitly for clarity and to ensure cleanup
@@ -87,9 +86,7 @@ export async function POST(request: NextRequest) {
     // Clear the auth cookie
     const response = NextResponse.json({ success: true, message: "Account deleted successfully" })
     response.cookies.set("auth-token", "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      ...authCookieOptions,
       maxAge: 0,
     })
 
@@ -99,4 +96,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to delete account" }, { status: 500 })
   }
 }
-

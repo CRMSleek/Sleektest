@@ -47,6 +47,9 @@ export interface Database {
           phone: string | null
           address: string | null
           user_id: string
+          compliance_mode: string
+          regulated_data_enabled: boolean
+          data_retention_days: number
         }
         Insert: {
           id?: string
@@ -59,6 +62,9 @@ export interface Database {
           phone?: string | null
           address?: string | null
           user_id: string
+          compliance_mode?: string
+          regulated_data_enabled?: boolean
+          data_retention_days?: number
         }
         Update: {
           id?: string
@@ -71,6 +77,9 @@ export interface Database {
           phone?: string | null
           address?: string | null
           user_id?: string
+          compliance_mode?: string
+          regulated_data_enabled?: boolean
+          data_retention_days?: number
         }
       }
       customers: {
@@ -371,26 +380,6 @@ export interface Database {
           updated_at?: string
         }
       }
-      analytics_assistant_context: {
-        Row: {
-          user_id: string
-          rolling_summary: string
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          user_id: string
-          rolling_summary?: string
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          user_id?: string
-          rolling_summary?: string
-          created_at?: string
-          updated_at?: string
-        }
-      }
       analytics_assistant_messages: {
         Row: {
           id: string
@@ -411,6 +400,44 @@ export interface Database {
           user_id?: string
           role?: string
           content?: string
+          created_at?: string
+        }
+      }
+      audit_logs: {
+        Row: {
+          id: string
+          actor_user_id: string | null
+          business_id: string | null
+          action: string
+          table_name: string | null
+          row_id: string | null
+          ip_address: string | null
+          user_agent: string | null
+          metadata: any
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          actor_user_id?: string | null
+          business_id?: string | null
+          action: string
+          table_name?: string | null
+          row_id?: string | null
+          ip_address?: string | null
+          user_agent?: string | null
+          metadata?: any
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          actor_user_id?: string | null
+          business_id?: string | null
+          action?: string
+          table_name?: string | null
+          row_id?: string | null
+          ip_address?: string | null
+          user_agent?: string | null
+          metadata?: any
           created_at?: string
         }
       }

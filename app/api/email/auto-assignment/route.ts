@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { emailAutoAssignmentRuleSchema } from "@/lib/validations"
 import { nanoid } from "nanoid"

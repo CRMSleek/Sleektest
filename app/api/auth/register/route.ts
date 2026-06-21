@@ -1,13 +1,16 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createUser, generateToken } from "@/lib/supabase/auth"
-import { supabase } from "@/lib/supabase/client"
+import { authCookieOptions, createUser, generateToken } from "@/lib/supabase/auth"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
+import { normalizeComplianceMode } from "@/lib/compliance"
+import { writeAuditLog } from "@/lib/audit-log"
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, password, name, businessName } = await request.json()
+    const { email, password, name, businessName, complianceMode } = await request.json()
     if (!email || !password) {
       return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
     }
+    const selectedComplianceMode = normalizeComplianceMode(complianceMode)
 
     // Check if user already exists
     const { data: existingUser } = await supabase
@@ -23,20 +26,16 @@ export async function POST(request: NextRequest) {
     // Create user
     const user = await createUser({ email, password, name })
 
-    // Create business if businessName is provided
-    let business = null
-    if (businessName) {
-      const { data: newBusiness } = await supabase
-        .from('businesses')
-        .insert({
-          name: businessName,
-          user_id: user.id
-        })
-        .select()
-        .single()
-      
-      business = newBusiness
-    }
+    const { data: business } = await supabase
+      .from('businesses')
+      .insert({
+        name: businessName || `${name || email}'s Business`,
+        user_id: user.id,
+        compliance_mode: selectedComplianceMode,
+        regulated_data_enabled: selectedComplianceMode !== "standard",
+      })
+      .select()
+      .single()
 
 
     const token = await generateToken(user.id)
@@ -50,12 +49,17 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    response.cookies.set("auth-token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: business?.id ?? null,
+      action: "user.register",
+      tableName: "users",
+      rowId: user.id,
+      metadata: { complianceMode: selectedComplianceMode },
+      request,
     })
+
+    response.cookies.set("auth-token", token, authCookieOptions)
 
     return response
   } catch (error) {

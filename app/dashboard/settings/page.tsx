@@ -26,6 +26,7 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import { motion } from "framer-motion"
 import { useTheme } from "next-themes"
+import { ConnectedToolsPanel } from "@/components/dashboard/crm-module-page"
 
 export default function SettingsPage() {
   const fadeUp = {
@@ -55,6 +56,7 @@ export default function SettingsPage() {
     description: "",
     phone: "",
     address: "",
+    complianceMode: "standard",
   })
 
   const [notificationSettings, setNotificationSettings] = useState({
@@ -242,6 +244,7 @@ export default function SettingsPage() {
         phone: data.businessData.phone || "",
         address: data.businessData.address || "",
         description: data.businessData.description || "",
+        complianceMode: data.businessData.complianceMode || "standard",
       })
       console.log("Business settings fetched successfully:", data.businessData)
     } catch (error) {
@@ -364,9 +367,10 @@ export default function SettingsPage() {
 
       <Tabs defaultValue="business" onValueChange={handleTabChange}>
         <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ duration: 0.6 }}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-3 md:grid-cols-6">
             <TabsTrigger value="business">Business</TabsTrigger>
             <TabsTrigger value="email">Email</TabsTrigger>
+            <TabsTrigger value="tools">Connected Tools</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="billing">Billing</TabsTrigger>
@@ -441,6 +445,23 @@ export default function SettingsPage() {
                     value={businessSettings.address}
                     onChange={(e) => setBusinessSettings({ ...businessSettings, address: e.target.value })}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label>Regulated Data Mode</Label>
+                  <Select
+                    value={businessSettings.complianceMode}
+                    onValueChange={(value) => setBusinessSettings({ ...businessSettings, complianceMode: value })}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select regulated data mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="standard">Standard</SelectItem>
+                      <SelectItem value="hipaa">HIPAA</SelectItem>
+                      <SelectItem value="ferpa">FERPA</SelectItem>
+                      <SelectItem value="hipaa_ferpa">HIPAA + FERPA</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {appError && <div className="text-red-500 text-sm">{appError}</div>}
                 {taskDone && <div className="text-green-500 text-sm">{taskDone}</div>}
@@ -599,6 +620,20 @@ export default function SettingsPage() {
                 </Button>
               </CardFooter>
             </Card>
+          </motion.div>
+        </TabsContent>
+
+        <TabsContent value="tools" className="space-y-6 pt-4">
+          <motion.div initial="hidden" animate="visible" variants={fadeUp} transition={{ delay: 0.12, duration: 0.6 }}>
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-xl font-semibold">Connected Tools</h2>
+                <p className="text-sm text-muted-foreground">
+                  Choose which outside tools the agent can prepare work for. Nothing is sent outside SleekCRM until setup and approval are complete.
+                </p>
+              </div>
+              <ConnectedToolsPanel />
+            </div>
           </motion.div>
         </TabsContent>
 

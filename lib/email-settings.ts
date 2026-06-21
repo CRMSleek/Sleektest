@@ -1,6 +1,7 @@
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import type { NextRequest } from "next/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
+import { decryptSecret } from "@/lib/crypto"
 
 export type EmailSettingsRow = {
   id: string
@@ -31,7 +32,7 @@ export async function getEffectiveEmailCredentials(request: NextRequest) {
   if (settings?.email && settings?.app_password) {
     return {
       email: settings.email,
-      password: settings.app_password,
+      password: decryptSecret(settings.app_password),
       smtp: {
         host: settings.smtp_host ?? undefined,
         port: settings.smtp_port ?? undefined,

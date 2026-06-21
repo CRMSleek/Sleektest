@@ -182,7 +182,7 @@ function encodeMessageWithAttachments(content: string, attachments: UploadedAtta
     `<!--sleekcrm-attachments:${JSON.stringify(attachments)}-->`,
     content,
     "",
-    "Uploaded CRM data is already imported into Supabase. Use MCP tools to query the new records before answering.",
+    "Uploaded CRM data is already imported. Use CRM tools to check the new records before answering.",
   ].join("\n")
 }
 

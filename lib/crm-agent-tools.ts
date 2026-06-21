@@ -1,8 +1,9 @@
 import { createHash } from "crypto"
 import nodemailer from "nodemailer"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getEffectiveEmailCredentials } from "@/lib/email-settings"
 import { fetchRelevantInboxEmailsForAnalysis, saveEmailsForAnalysis } from "@/lib/email-analysis-selection"
+import { buildPlatformSummary, getIntegrationSummary } from "@/lib/crm-platform"
 import type { NextRequest } from "next/server"
 
 export type UserContext = {
@@ -25,7 +26,18 @@ export type ToolStatus = {
 export type EvidenceItem = {
   label: string
   detail: string
-  recordType?: "customer" | "survey" | "survey_response" | "email" | "analysis"
+  recordType?:
+    | "customer"
+    | "survey"
+    | "survey_response"
+    | "email"
+    | "analysis"
+    | "crm_record"
+    | "donation"
+    | "event"
+    | "automation"
+    | "report"
+    | "integration"
   recordId?: string
 }
 
@@ -80,6 +92,12 @@ export type CRMAgentContext = {
   analyses: CRMAnalysisResult[]
   proposals: CRMActionProposal[]
   statuses: ToolStatus[]
+  platform?: {
+    metrics: Record<string, number>
+    objectTypes: Array<{ id: string; api_name: string; label: string; plural_label: string; module: string }>
+    integrations: Array<{ key: string; type: string; name: string; status: string; configured: boolean }>
+    complianceReadiness: { label: string; note: string }
+  } | null
 }
 
 function shouldAutoSelectRelevantEmails(prompt: string) {
@@ -114,6 +132,27 @@ export const DEFAULT_AGENT_SKILLS = [
     description: "Drafts plain, specific emails based on CRM evidence.",
     instructions:
       "When drafting emails, write short professional messages, include why the recipient is being contacted, and avoid unsupported claims.",
+  },
+  {
+    id: "fundraising-ops",
+    name: "Fundraising Operations Analyst",
+    description: "Finds donor follow-ups, campaign gaps, pledge work, and receipt tasks.",
+    instructions:
+      "When fundraising is relevant, separate recorded donations from payment-provider scaffolds, cite donor/campaign data, and propose reviewable follow-ups.",
+  },
+  {
+    id: "event-ops",
+    name: "Event Operations Planner",
+    description: "Connects event registrations, attendee work, event communications, and follow-up tasks.",
+    instructions:
+      "When events are relevant, inspect event and registration records, identify missing check-in or communication work, and draft approval-gated next steps.",
+  },
+  {
+    id: "governance-admin",
+    name: "Governance and Compliance-Readiness Reviewer",
+    description: "Reviews audit logs, consent, suppression, integrations, approvals, and admin settings.",
+    instructions:
+      "When compliance or admin controls are relevant, say readiness not legal compliance, cite controls present, and require approval for sensitive changes.",
   },
 ]
 
@@ -331,6 +370,33 @@ async function loadCRMData(user: UserContext) {
     surveys: surveysResult.data || [],
     responses: responsesResult.data || [],
     emails: emailsResult.data || [],
+  }
+}
+
+async function loadPlatformContext(user: UserContext): Promise<CRMAgentContext["platform"]> {
+  try {
+    const summary = await buildPlatformSummary(user)
+    return {
+      metrics: summary.metrics,
+      objectTypes: summary.objectTypes.map((objectType: any) => ({
+        id: objectType.id,
+        api_name: objectType.api_name,
+        label: objectType.label,
+        plural_label: objectType.plural_label,
+        module: objectType.module,
+      })),
+      integrations: summary.integrations.map((integration: any) => ({
+        key: integration.key,
+        type: integration.type,
+        name: integration.name,
+        status: integration.config?.status || integration.status,
+        configured: Boolean(integration.config),
+      })),
+      complianceReadiness: summary.complianceReadiness,
+    }
+  } catch (error) {
+    console.warn("Platform context unavailable:", error)
+    return null
   }
 }
 
@@ -1184,7 +1250,10 @@ export async function executeCRMAction(user: UserContext, action: CRMActionPropo
 export async function buildCRMAgentContext(user: UserContext, prompt: string, request?: NextRequest): Promise<CRMAgentContext> {
   const analysisTypes = selectAnalysisTypes(prompt)
   const emailSelectionStatuses = await autoSelectEmailsForPrompt(user, prompt, request)
-  const { data, analyses, statuses } = await runCachedAnalyses(user, analysisTypes)
+  const [{ data, analyses, statuses }, platform] = await Promise.all([
+    runCachedAnalyses(user, analysisTypes),
+    loadPlatformContext(user),
+  ])
   const proposals = proposeActions({ user, prompt, analyses, data })
   return {
     snapshot: buildSnapshot(data),
@@ -1195,6 +1264,7 @@ export async function buildCRMAgentContext(user: UserContext, prompt: string, re
     analyses,
     proposals,
     statuses: [...emailSelectionStatuses, ...statuses],
+    platform,
   }
 }
 
@@ -1204,8 +1274,9 @@ export function formatAgentContext(context: CRMAgentContext | null) {
     {
       snapshot: context.snapshot,
       toolPolicy:
-        "Use MCP tools for record details. Do not rely on prompt-loaded raw rows. Updates are scoped to the authenticated user's Supabase records.",
+        "Use CRM tools for record details. Do not rely on prompt-loaded raw rows. Updates are scoped to the authenticated user's records. Risky actions, external communications, destructive changes, and major record updates require explicit user approval.",
       availableTools: CRM_MCP_TOOLS.map((tool) => tool.name),
+      platform: context.platform,
       analyses: context.analyses.map((analysis) => ({
         type: analysis.type,
         cached: analysis.cached,
@@ -1242,7 +1313,39 @@ function summarizeAnalysisForPrompt(analysis: CRMAnalysisResult) {
   return result
 }
 
-type CRMEntity = "customers" | "surveys" | "survey_responses" | "emails" | "crm_agent_tasks"
+type CRMEntity =
+  | "customers"
+  | "surveys"
+  | "survey_responses"
+  | "emails"
+  | "crm_agent_tasks"
+  | "crm_object_types"
+  | "crm_field_definitions"
+  | "crm_records"
+  | "crm_record_relationships"
+  | "crm_engagement_events"
+  | "crm_duplicate_sets"
+  | "crm_communication_templates"
+  | "crm_public_forms"
+  | "crm_automation_rules"
+  | "crm_automation_runs"
+  | "crm_reports"
+  | "crm_dashboards"
+  | "crm_dashboard_widgets"
+  | "crm_campaigns"
+  | "crm_funds"
+  | "crm_donations"
+  | "crm_pledges"
+  | "crm_events"
+  | "crm_event_registrations"
+  | "crm_integration_configs"
+  | "crm_webhook_events"
+  | "crm_roles"
+  | "crm_user_roles"
+  | "crm_consent_preferences"
+  | "crm_suppression_list"
+  | "crm_usage_events"
+  | "crm_ai_action_approvals"
 
 const CRM_SCHEMA: Record<CRMEntity, { scope: "business" | "user"; readable: string[]; writable: string[] }> = {
   customers: {
@@ -1269,6 +1372,141 @@ const CRM_SCHEMA: Record<CRMEntity, { scope: "business" | "user"; readable: stri
     scope: "user",
     readable: ["id", "title", "description", "status", "priority", "reasoning", "evidence", "metadata", "created_at", "updated_at"],
     writable: ["title", "description", "status", "priority", "reasoning", "evidence", "metadata", "updated_at"],
+  },
+  crm_object_types: {
+    scope: "business",
+    readable: ["id", "api_name", "label", "plural_label", "description", "module", "is_system", "is_active", "display_field", "settings", "created_at", "updated_at"],
+    writable: ["label", "plural_label", "description", "is_active", "display_field", "settings", "updated_at"],
+  },
+  crm_field_definitions: {
+    scope: "business",
+    readable: ["id", "object_type_id", "api_name", "label", "field_type", "is_required", "is_system", "is_unique", "options", "relationship_object_type_id", "position", "help_text", "created_at", "updated_at"],
+    writable: ["label", "is_required", "is_unique", "options", "relationship_object_type_id", "position", "help_text", "updated_at"],
+  },
+  crm_records: {
+    scope: "business",
+    readable: ["id", "object_type_id", "owner_user_id", "source_table", "source_id", "display_name", "values", "lifecycle_status", "duplicate_key", "created_at", "updated_at"],
+    writable: ["owner_user_id", "display_name", "values", "lifecycle_status", "duplicate_key", "updated_at"],
+  },
+  crm_record_relationships: {
+    scope: "business",
+    readable: ["id", "from_record_id", "to_record_id", "relationship_type", "metadata", "created_at"],
+    writable: ["relationship_type", "metadata"],
+  },
+  crm_engagement_events: {
+    scope: "business",
+    readable: ["id", "record_id", "customer_id", "actor_user_id", "event_type", "subject", "body", "occurred_at", "source_table", "source_id", "status", "metadata", "created_at"],
+    writable: ["event_type", "subject", "body", "occurred_at", "status", "metadata"],
+  },
+  crm_duplicate_sets: {
+    scope: "business",
+    readable: ["id", "object_type_id", "match_key", "confidence", "status", "record_ids", "suggested_primary_record_id", "metadata", "created_at", "resolved_at"],
+    writable: ["status", "suggested_primary_record_id", "metadata", "resolved_at"],
+  },
+  crm_communication_templates: {
+    scope: "business",
+    readable: ["id", "user_id", "channel", "name", "subject", "body", "variables", "is_active", "created_at", "updated_at"],
+    writable: ["channel", "name", "subject", "body", "variables", "is_active", "updated_at"],
+  },
+  crm_public_forms: {
+    scope: "business",
+    readable: ["id", "object_type_id", "name", "slug", "form_type", "custom_domain", "schema", "settings", "is_active", "created_at", "updated_at"],
+    writable: ["object_type_id", "name", "slug", "form_type", "custom_domain", "schema", "settings", "is_active", "updated_at"],
+  },
+  crm_automation_rules: {
+    scope: "business",
+    readable: ["id", "name", "description", "trigger_type", "trigger_config", "actions", "requires_approval", "is_active", "created_at", "updated_at"],
+    writable: ["name", "description", "trigger_type", "trigger_config", "actions", "requires_approval", "is_active", "updated_at"],
+  },
+  crm_automation_runs: {
+    scope: "business",
+    readable: ["id", "automation_rule_id", "status", "trigger_payload", "actions_run", "output", "error_message", "started_at", "finished_at", "created_at"],
+    writable: ["status", "actions_run", "output", "error_message", "started_at", "finished_at"],
+  },
+  crm_reports: {
+    scope: "business",
+    readable: ["id", "user_id", "name", "description", "report_type", "definition", "is_shared", "created_at", "updated_at"],
+    writable: ["name", "description", "report_type", "definition", "is_shared", "updated_at"],
+  },
+  crm_dashboards: {
+    scope: "business",
+    readable: ["id", "user_id", "name", "layout", "filters", "is_default", "created_at", "updated_at"],
+    writable: ["name", "layout", "filters", "is_default", "updated_at"],
+  },
+  crm_dashboard_widgets: {
+    scope: "business",
+    readable: ["id", "dashboard_id", "widget_type", "title", "config", "position", "created_at"],
+    writable: ["widget_type", "title", "config", "position"],
+  },
+  crm_campaigns: {
+    scope: "business",
+    readable: ["id", "name", "description", "campaign_type", "goal_amount", "start_date", "end_date", "status", "metadata", "created_at", "updated_at"],
+    writable: ["name", "description", "campaign_type", "goal_amount", "start_date", "end_date", "status", "metadata", "updated_at"],
+  },
+  crm_funds: {
+    scope: "business",
+    readable: ["id", "name", "description", "is_active", "created_at"],
+    writable: ["name", "description", "is_active"],
+  },
+  crm_donations: {
+    scope: "business",
+    readable: ["id", "donor_record_id", "customer_id", "campaign_id", "fund_id", "amount", "currency", "donation_date", "payment_provider", "payment_status", "receipt_status", "metadata", "created_at"],
+    writable: ["donor_record_id", "customer_id", "campaign_id", "fund_id", "amount", "currency", "donation_date", "payment_status", "receipt_status", "metadata"],
+  },
+  crm_pledges: {
+    scope: "business",
+    readable: ["id", "donor_record_id", "campaign_id", "amount", "currency", "due_date", "status", "metadata", "created_at"],
+    writable: ["donor_record_id", "campaign_id", "amount", "currency", "due_date", "status", "metadata"],
+  },
+  crm_events: {
+    scope: "business",
+    readable: ["id", "campaign_id", "name", "description", "starts_at", "ends_at", "location", "status", "external_calendar_provider", "external_calendar_id", "metadata", "created_at", "updated_at"],
+    writable: ["campaign_id", "name", "description", "starts_at", "ends_at", "location", "status", "metadata", "updated_at"],
+  },
+  crm_event_registrations: {
+    scope: "business",
+    readable: ["id", "event_id", "record_id", "customer_id", "attendee_name", "attendee_email", "status", "checked_in_at", "metadata", "created_at"],
+    writable: ["event_id", "record_id", "customer_id", "attendee_name", "attendee_email", "status", "checked_in_at", "metadata"],
+  },
+  crm_integration_configs: {
+    scope: "business",
+    readable: ["id", "provider_key", "provider_type", "display_name", "status", "config", "last_tested_at", "last_test_status", "last_error", "created_at", "updated_at"],
+    writable: ["display_name", "status", "config", "last_tested_at", "last_test_status", "last_error", "updated_at"],
+  },
+  crm_webhook_events: {
+    scope: "business",
+    readable: ["id", "provider_key", "event_type", "payload", "status", "error_message", "received_at", "processed_at"],
+    writable: ["status", "error_message", "processed_at"],
+  },
+  crm_roles: {
+    scope: "business",
+    readable: ["id", "name", "permissions", "is_system", "created_at"],
+    writable: ["name", "permissions"],
+  },
+  crm_user_roles: {
+    scope: "business",
+    readable: ["id", "user_id", "role_id", "created_at"],
+    writable: ["user_id", "role_id"],
+  },
+  crm_consent_preferences: {
+    scope: "business",
+    readable: ["id", "record_id", "customer_id", "channel", "status", "source", "captured_at", "metadata"],
+    writable: ["record_id", "customer_id", "channel", "status", "source", "captured_at", "metadata"],
+  },
+  crm_suppression_list: {
+    scope: "business",
+    readable: ["id", "channel", "value", "reason", "source", "created_at"],
+    writable: ["channel", "value", "reason", "source"],
+  },
+  crm_usage_events: {
+    scope: "business",
+    readable: ["id", "user_id", "metric", "quantity", "metadata", "created_at"],
+    writable: ["metric", "quantity", "metadata"],
+  },
+  crm_ai_action_approvals: {
+    scope: "business",
+    readable: ["id", "user_id", "action_kind", "title", "reasoning", "evidence", "payload", "status", "approved_by", "approved_at", "executed_at", "execution_result", "created_at"],
+    writable: ["status", "approved_by", "approved_at", "executed_at", "execution_result"],
   },
 }
 
@@ -1520,22 +1758,110 @@ async function cleanCRMRecords(user: UserContext, args: Record<string, any>) {
   return { entity, scanned: result.records.length, changed, changes: changes.slice(0, 50) }
 }
 
+async function listConnectedTools(user: UserContext) {
+  const integrations = await getIntegrationSummary(user)
+  return {
+    tools: integrations.map((integration) => ({
+      key: integration.key,
+      name: integration.name,
+      type: integration.type,
+      connectionMode: integration.connectionMode,
+      status: integration.config?.status || integration.status,
+      ready: integration.config?.status === "configured" || integration.config?.status === "enabled",
+      capabilities: integration.capabilities,
+      agentActions: integration.agentActions,
+      notes: integration.notes,
+      sourceUrl: integration.sourceUrl,
+    })),
+  }
+}
+
+async function prepareConnectedToolAction(user: UserContext, args: Record<string, any>) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const tools = await getIntegrationSummary(user)
+  const providerKey = safeText(args.providerKey)
+  const action = safeText(args.action)
+  if (!providerKey || !action) throw new Error("providerKey and action required")
+  const provider = tools.find((tool) => tool.key === providerKey)
+  if (!provider) throw new Error("Connected tool not found")
+
+  const payload = {
+    providerKey,
+    providerType: provider.type,
+    connectionMode: provider.connectionMode,
+    action,
+    targetRecordId: safeText(args.targetRecordId) || null,
+    draftPayload: args.payload && typeof args.payload === "object" ? args.payload : {},
+    ready: provider.config?.status === "configured" || provider.config?.status === "enabled",
+  }
+
+  const { data, error } = await supabase
+    .from("crm_ai_action_approvals")
+    .insert({
+      business_id: businessId,
+      user_id: user.id,
+      action_kind: "connected_tool",
+      title: `${provider.name}: ${action}`,
+      reasoning: safeText(args.reasoning) || "Prepared by the agent for review before anything external runs.",
+      evidence: Array.isArray(args.evidence) ? args.evidence.slice(0, 10) : [],
+      payload,
+      status: "pending",
+    })
+    .select("id, action_kind, title, status, payload, created_at")
+    .single()
+  if (error) throw error
+  return {
+    ok: true,
+    approvalRequired: true,
+    configured: payload.ready,
+    message: payload.ready
+      ? "Draft action saved for review. It has not been sent to the connected tool."
+      : "Draft action saved. This connected tool still needs setup before it can run.",
+    action: data,
+  }
+}
+
 export const CRM_MCP_TOOLS = [
   {
     name: "crm.describe_schema",
-    description: "Describe editable Supabase CRM tables, field permissions, and user/business scoping.",
+    description: "Describe editable CRM tables, field permissions, and user/business scoping.",
     inputSchema: {
       type: "object",
       properties: {},
     },
   },
   {
-    name: "crm.query_records",
-    description: "Query scoped CRM records from Supabase. Supports entity, limit, search, exact filters, and selected fields. Use this instead of prompt-loaded raw rows.",
+    name: "crm.list_connected_tools",
+    description: "List connected tools the agent can use or prepare actions for, including setup state and safe capabilities.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "crm.prepare_connected_tool_action",
+    description: "Create a reviewable draft for an external tool action. Does not call outside services. Use for email, SMS, accounting, calendar, survey, donor research, Zapier, and payment handoffs.",
     inputSchema: {
       type: "object",
       properties: {
-        entity: { type: "string", enum: ["customers", "surveys", "survey_responses", "emails", "crm_agent_tasks"] },
+        providerKey: { type: "string" },
+        action: { type: "string" },
+        targetRecordId: { type: "string" },
+        payload: { type: "object" },
+        reasoning: { type: "string" },
+        evidence: { type: "array", items: { type: "object" } },
+      },
+      required: ["providerKey", "action"],
+    },
+  },
+  {
+    name: "crm.query_records",
+    description: "Query scoped CRM records. Supports entity, limit, search, exact filters, and selected fields. Use this instead of prompt-loaded raw rows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity: { type: "string", enum: Object.keys(CRM_SCHEMA) },
         limit: { type: "number" },
         search: { type: "string" },
         filters: { type: "object" },
@@ -1546,11 +1872,11 @@ export const CRM_MCP_TOOLS = [
   },
   {
     name: "crm.update_records",
-    description: "Update scoped Supabase CRM records. Use for customer/email/record cleanup after explicit user request or approval. Never updates outside current user/business scope.",
+    description: "Update scoped CRM records. Use for customer/email/record cleanup after explicit user request or approval. Never updates outside current user/business scope.",
     inputSchema: {
       type: "object",
       properties: {
-        entity: { type: "string", enum: ["customers", "surveys", "survey_responses", "emails", "crm_agent_tasks"] },
+        entity: { type: "string", enum: Object.keys(CRM_SCHEMA) },
         ids: { type: "array", items: { type: "string" } },
         match: { type: "object" },
         updates: { type: "object" },
@@ -1573,7 +1899,7 @@ export const CRM_MCP_TOOLS = [
   },
   {
     name: "crm.import_rows",
-    description: "Import structured CRM rows into Supabase. Rows may represent customers or saved emails. Upserts customers by business/email and saves emails for analysis.",
+    description: "Import structured CRM rows. Rows may represent customers or saved emails. Upserts customers by business/email and saves emails for analysis.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1647,6 +1973,14 @@ export async function callCRMTool(user: UserContext, name: string, args: Record<
 
   if (name === "crm.query_records") {
     return { content: [{ type: "text", text: JSON.stringify(await queryCRMRecords(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.list_connected_tools") {
+    return { content: [{ type: "text", text: JSON.stringify(await listConnectedTools(user), null, 2) }] }
+  }
+
+  if (name === "crm.prepare_connected_tool_action") {
+    return { content: [{ type: "text", text: JSON.stringify(await prepareConnectedToolAction(user, args), null, 2) }] }
   }
 
   if (name === "crm.update_records") {

@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { customerSchema } from "@/lib/validations"
+import { writeAuditLog } from "@/lib/audit-log"
 
 export async function GET(request: NextRequest) {
   try {
@@ -65,6 +66,15 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (error) throw error
+
+    await writeAuditLog({
+      actorUserId: user.id,
+      businessId: user.business.id,
+      action: "customer.created",
+      tableName: "customers",
+      rowId: customer.id,
+      request,
+    })
 
     const normalized = {
       id: customer.id,

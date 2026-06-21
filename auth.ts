@@ -1,6 +1,6 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 
 // Helper for refreshing Google access tokens
 async function refreshAccessToken(token: any) {
@@ -50,7 +50,7 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
       },
     }),
   ],
-  debug: true,
+  debug: process.env.NODE_ENV !== "production",
   session: { strategy: "jwt" },
   secret: process.env.NEXTAUTH_SECRET || process.env.JWT_SECRET,
   callbacks: {
@@ -78,8 +78,6 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
       const nextSession = session as any
       nextSession.user = nextSession.user || {}
       nextSession.user.googleId = token.googleId
-      nextSession.accessToken = token.accessToken
-      nextSession.refreshToken = token.refreshToken
       return session
     },
     async redirect({ url, baseUrl }) {

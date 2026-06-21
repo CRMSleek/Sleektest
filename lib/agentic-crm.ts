@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getEffectiveEmailCredentials } from "@/lib/email-settings"
 import type { NextRequest } from "next/server"
 

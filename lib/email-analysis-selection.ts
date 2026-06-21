@@ -1,7 +1,7 @@
 import { ImapFlow } from "imapflow"
 import { simpleParser } from "mailparser"
 import { nanoid } from "nanoid"
-import { supabase } from "@/lib/supabase/client"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getEffectiveEmailCredentials } from "@/lib/email-settings"
 import type { NextRequest } from "next/server"
 
