@@ -59,11 +59,13 @@ cp .env.example .env.local
 
 Edit `.env.local` with your configuration:
 \`\`\`env
-DATABASE_URL="postgresql://username:password@localhost:5432/sleekcrm"
-JWT_SECRET="your-super-secret-jwt-key"
-OPENAI_API_KEY="your-openai-api-key"
-NEXTAUTH_URL="http://localhost:3000"
+NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="your-supabase-anon-key"
+SUPABASE_SERVICE_ROLE_KEY="your-supabase-service-role-key"
+AUTH_SECRET="your-32-byte-auth-secret"
 \`\`\`
+
+Run `npm run check:env` before deploying.
 
 4. Set up the database:
 \`\`\`bash
@@ -169,19 +171,33 @@ The application uses the following main entities:
 
 ## Environment Variables
 
+For Vercel, set these in Project Settings -> Environment Variables for Production and Preview, then redeploy. Public browser variables must use the `NEXT_PUBLIC_` prefix. Server secrets must not use that prefix.
+
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `JWT_SECRET` | Secret key for JWT tokens | Yes |
-| `OPENAI_API_KEY` | OpenAI API key for insights | No |
-| `OPENROUTER_KEY` | OpenRouter key for the CRM agent console | No |
-| `OPENROUTER_MODEL` | OpenRouter model name for CRM agent console | No |
-| `NEXTAUTH_URL` | Application URL | Yes |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Yes |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL, safe for browser use | Yes |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase browser anon key | Yes |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key, server-side only | Yes |
-| `GOOGLE_CLIENT_ID` | Google OAuth client for login/Gmail access | No |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth secret, server-side only | No |
+| `AUTH_SECRET` | Preferred production auth secret for Vercel/Auth.js | Yes, unless `NEXTAUTH_SECRET` or `JWT_SECRET` is set |
+| `NEXTAUTH_SECRET` | Supported fallback auth secret | Yes, unless `AUTH_SECRET` or `JWT_SECRET` is set |
+| `JWT_SECRET` | Legacy fallback for existing custom auth cookies | Yes, unless `AUTH_SECRET` or `NEXTAUTH_SECRET` is set |
+| `GOOGLE_CLIENT_ID` | Optional Google OAuth client for sign-in/Gmail access | No |
+| `GOOGLE_CLIENT_SECRET` | Optional Google OAuth secret, server-side only | No |
+| `OPENROUTER_KEY` | OpenRouter key for the CRM agent console | No |
+| `OPENROUTER_MODEL` | OpenRouter model name for CRM agent console | No |
+| `OPENAI_API_KEY` | OpenAI API key for insights | No |
+| `HF_API_TOKEN` | Hugging Face token for optional analytics digest | No |
+| `EMAIL_ADDRESS` | Optional contact form sender account | No |
+| `APP_PASSWORD` | Optional contact form sender app password | No |
+| `DEFAULT_IMAP_HOST` | Optional default inbox host override | No |
+| `DEFAULT_IMAP_PORT` | Optional default inbox port override | No |
+| `COMPLIANCE_ENCRYPTION_KEY` | Optional 32-byte or base64-encoded 32-byte secret for stored integration secrets | No |
+
+Vercel notes:
+- Changing environment variables affects only new deployments. Redeploy after edits.
+- `NEXT_PUBLIC_*` values are included in browser bundles at build time, so do not store secrets there.
+- `SUPABASE_SERVICE_ROLE_KEY`, auth secrets, OAuth secrets, email passwords, and integration credentials must stay server-side.
+- Google OAuth variables must be set as a pair. If both are absent, password login still works and Google sign-in stays disabled.
 
 ## Integration Status
 

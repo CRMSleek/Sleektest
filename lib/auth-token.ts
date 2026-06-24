@@ -1,12 +1,15 @@
 import * as jose from "jose"
 
-const JWT_SECRET = process.env.JWT_SECRET
+function getAuthSecret() {
+  const value = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || process.env.JWT_SECRET
+  if (!value) {
+    throw new Error("Missing auth secret. Set AUTH_SECRET or NEXTAUTH_SECRET in Vercel Production.")
+  }
+  return value
+}
 
 function getJwtSecret() {
-  if (!JWT_SECRET) {
-    throw new Error("JWT_SECRET is required")
-  }
-  return new TextEncoder().encode(JWT_SECRET)
+  return new TextEncoder().encode(getAuthSecret())
 }
 
 export const authCookieOptions = {

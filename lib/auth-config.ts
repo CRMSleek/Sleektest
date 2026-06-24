@@ -1,11 +1,14 @@
 import GoogleProvider from "next-auth/providers/google"
 import { supabaseAdmin as supabase } from "./supabase/server"
+import { getAuthSecret, getGoogleOAuthConfig } from "@/lib/env/server"
+
+const googleOAuth = getGoogleOAuthConfig()
 
 export const authOptions = {
-  providers: [
+  providers: googleOAuth ? [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: googleOAuth.clientId,
+      clientSecret: googleOAuth.clientSecret,
       authorization: {
         params: {
           scope: [
@@ -20,7 +23,7 @@ export const authOptions = {
         },
       },
     }),
-  ],
+  ] : [],
   callbacks: {
     async signIn({ user, account, profile }: any) {
       if (account?.provider === "google") {
@@ -88,5 +91,5 @@ export const authOptions = {
   },
   pages: { signIn: "/login", signUp: "/register" },
   session: { strategy: "jwt" },
-  secret: process.env.JWT_SECRET,
+  secret: getAuthSecret(),
 }

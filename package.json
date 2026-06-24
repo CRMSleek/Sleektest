@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "check:env": "node tools/check-env.mjs",
     "start": "next start",
     "lint": "next lint"
   },

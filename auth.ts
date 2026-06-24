@@ -1,17 +1,24 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
+import { getAuthSecret, getGoogleOAuthConfig } from "@/lib/env/server"
+
+const googleOAuth = getGoogleOAuthConfig()
 
 // Helper for refreshing Google access tokens
 async function refreshAccessToken(token: any) {
+  if (!googleOAuth) {
+    return { ...token, error: "GoogleOAuthNotConfigured" }
+  }
+
   try {
     const url = "https://oauth2.googleapis.com/token"
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+        client_id: googleOAuth.clientId,
+        client_secret: googleOAuth.clientSecret,
         grant_type: "refresh_token",
         refresh_token: token.refreshToken,
       }),
@@ -33,10 +40,10 @@ async function refreshAccessToken(token: any) {
 }
 
 export const { auth, signIn, signOut, handlers } = NextAuth({
-  providers: [
+  providers: googleOAuth ? [
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: googleOAuth.clientId,
+      clientSecret: googleOAuth.clientSecret,
       authorization: {
         params: {
           scope: [
@@ -49,10 +56,10 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
         },
       },
     }),
-  ],
+  ] : [],
   debug: process.env.NODE_ENV !== "production",
   session: { strategy: "jwt" },
-  secret: process.env.NEXTAUTH_SECRET || process.env.JWT_SECRET,
+  secret: getAuthSecret(),
   callbacks: {
     async jwt({ token, account, profile }) {
       // On initial sign in
