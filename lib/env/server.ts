@@ -2,7 +2,44 @@ import "server-only"
 
 function readServerEnv(name: string) {
   const value = process.env[name]
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
+  if (typeof value !== "string") return undefined
+  const normalized = normalizeEnvValue(value)
+  return normalized || undefined
+}
+
+function normalizeEnvValue(value: string) {
+  const trimmed = value.trim()
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed
+  return unquoted.replace(/\s+/g, "")
+}
+
+function parseJwtPayload(value: string) {
+  const parts = value.split(".")
+  if (parts.length !== 3 || parts.some((part) => !part)) return null
+
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function getRequiredSupabaseJwt(name: string, expectedRole: string) {
+  const value = getRequiredServerEnv(name)
+  const payload = parseJwtPayload(value)
+  if (!payload) {
+    throw new Error(`${name} must be a valid Supabase JWT. Re-copy it from Supabase Project Settings -> API.`)
+  }
+  if (payload.role !== expectedRole) {
+    throw new Error(`${name} must have Supabase role "${expectedRole}". Current key has role "${String(payload.role || "unknown")}".`)
+  }
+  return value
 }
 
 export function getOptionalServerEnv(name: string) {
@@ -40,6 +77,6 @@ export function getGoogleOAuthConfig() {
 export function getSupabaseServerConfig() {
   return {
     supabaseUrl: getRequiredServerEnv("NEXT_PUBLIC_SUPABASE_URL"),
-    serviceRoleKey: getRequiredServerEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    serviceRoleKey: getRequiredSupabaseJwt("SUPABASE_SERVICE_ROLE_KEY", "service_role"),
   }
 }

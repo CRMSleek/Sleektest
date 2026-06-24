@@ -197,6 +197,7 @@ Vercel notes:
 - Changing environment variables affects only new deployments. Redeploy after edits.
 - `NEXT_PUBLIC_*` values are included in browser bundles at build time, so do not store secrets there.
 - `SUPABASE_SERVICE_ROLE_KEY`, auth secrets, OAuth secrets, email passwords, and integration credentials must stay server-side.
+- Paste Supabase keys as raw values in Vercel, without surrounding quotes. `NEXT_PUBLIC_SUPABASE_ANON_KEY` must be the `anon` key, and `SUPABASE_SERVICE_ROLE_KEY` must be the `service_role` key.
 - Google OAuth variables must be set as a pair. If both are absent, password login still works and Google sign-in stays disabled.
 
 ## Integration Status

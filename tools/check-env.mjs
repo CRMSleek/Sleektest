@@ -5,13 +5,24 @@ const envFiles = [".env.local", ".env"]
 
 function unquote(value) {
   const trimmed = value.trim()
-  if (
+  const unquoted =
     (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1)
+      ? trimmed.slice(1, -1)
+      : trimmed
+  return unquoted.replace(/\s+/g, "")
+}
+
+function parseJwtPayload(value) {
+  const parts = String(value || "").split(".")
+  if (parts.length !== 3 || parts.some((part) => !part)) return null
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"))
+  } catch {
+    return null
   }
-  return trimmed
 }
 
 for (const file of envFiles) {
@@ -76,6 +87,23 @@ if (process.env.COMPLIANCE_ENCRYPTION_KEY) {
   const utf8Length = Buffer.from(raw, "utf8").length
   if (base64Length !== 32 && utf8Length !== 32) {
     missing.push("COMPLIANCE_ENCRYPTION_KEY must be 32 bytes or base64-encoded 32 bytes when set")
+  }
+}
+
+const supabaseJwtRoles = [
+  ["NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon"],
+  ["SUPABASE_SERVICE_ROLE_KEY", "service_role"],
+]
+
+for (const [key, expectedRole] of supabaseJwtRoles) {
+  if (!process.env[key]) continue
+  const payload = parseJwtPayload(process.env[key])
+  if (!payload) {
+    missing.push(`${key} must be a valid Supabase JWT`)
+    continue
+  }
+  if (payload.role !== expectedRole) {
+    missing.push(`${key} must have Supabase role "${expectedRole}"`)
   }
 }
 
