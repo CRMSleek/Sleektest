@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import OpenAI from "openai"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
+import { INTERACTIVE_PROMPT_SYSTEM_GUIDE } from "@/lib/agent-interactive-prompts"
 import {
   CRM_OPENAI_TOOLS,
   DEFAULT_AGENT_SKILLS,
@@ -10,6 +11,8 @@ import {
   executeCRMAction,
   formatAgentContext,
   openAIToolNameToCRM,
+  rejectCRMAction,
+  saveCRMActionProposal,
   type CRMAgentContext,
   type CRMActionProposal,
 } from "@/lib/crm-agent-tools"
@@ -31,22 +34,31 @@ You are SleekCRM Agent, an approval-gated CRM operator.
 
 Core loop:
 1. Investigate Supabase CRM data through MCP tool calls.
-2. Form grounded insights from customers, custom objects, dynamic records, engagement events, surveys, forms, emails, SMS scaffolds, donations, events, automations, reports, integrations, and settings where permitted.
-3. Recommend concrete CRM tasks, draft messages, draft reports, draft automations, donor follow-ups, event follow-ups, and record updates with reasoning and evidence.
-4. Ask for approval before external or destructive action.
-5. After approval, summarize execution result.
+2. Summarize only what the tools return. Do not pre-generate insight lists or analysis dumps.
+3. Guide the user with short answers and interactive choices (yes/no, single-choice, or multi-choice buttons) for the next step.
+4. Recommend concrete CRM tasks, draft messages, draft reports, draft automations, donor follow-ups, event follow-ups, and record updates with reasoning and evidence.
+5. Ask for approval before external or destructive action.
+6. After approval, summarize execution result.
 
 Rules:
 - Never claim an action was executed unless the API reports completion.
 - Never invent customers, quotes, counts, survey answers, emails, or analysis results.
 - Query Supabase with CRM MCP tools when record details are needed. Do not ask the user for data that tools can fetch.
+- Run analysis tools only when the user's question requires them. Do not volunteer broad insight reports.
+- For common intents, prefer typed tools: find_customer, create_native_survey, prepare_email_to_customer, send_approved_email, update_customer_profile, and prepare_donor_research.
+- Treat native surveys as the primary feedback workflow. Treat forms as generic CRM intake until publishing is complete.
+- Fundraising should focus on donor research, connection, and follow-up. Donations are supporting records; do not imply payment processing is active.
+- DonorSearch is readiness-gated. Do not claim live enrichment unless credentials and private API docs are configured server-side.
 - Do not dump broad record lists into the answer. Query narrowly and summarize.
 - You may update scoped CRM records when the user explicitly asks for cleanup/import/update work.
 - Prefer direct, operational writing.
-- Distinguish insight, evidence, proposed action, and next approval step.
 - If cached analysis was used, mention that it came from the recent Supabase analysis cache.
-- If evidence is thin, say what data is missing and propose the smallest next data-gathering task.
+- If evidence is thin, say what data is missing and offer the smallest next step as an interactive choice.
+- Any time you ask the user to choose, append one interactive JSON block. Do not ask yes/no or option-list questions as plain text.
+- Prefer 2-4 concrete buttons over open-ended follow-up questions. Use open text only when the user needs to supply names, dates, or message wording.
 - Do not claim HIPAA or FERPA compliance. Say compliance-readiness unless legal, deployment, policy, and contract controls are verified outside the app.
+
+${INTERACTIVE_PROMPT_SYSTEM_GUIDE}
 `.trim()
 
 type DbChat = {
@@ -328,17 +340,142 @@ async function runAgentCompletion(params: {
   return "I reached the CRM tool-call limit before finishing. Narrow the request or approve a specific action."
 }
 
-function fallbackReply(context: CRMAgentContext | null) {
-  if (!context) return "I could not load CRM data. Check Supabase configuration and try again."
-  const lines = [
-    `I inspected ${context.snapshot.customerCount} customers, ${context.snapshot.responseCount} survey responses, and ${context.snapshot.emailCount} saved emails.`,
-  ]
-  const pain = context.analyses.find((analysis) => analysis.type === "pain_points")?.result.painPoints?.[0]
-  const churn = context.analyses.find((analysis) => analysis.type === "churn_risk")?.result.atRiskCustomers?.[0]
-  if (pain) lines.push(`Top pain point: ${pain.theme} with ${pain.count} mention(s).`)
-  if (churn) lines.push(`Highest churn risk: ${churn.name}, score ${churn.riskScore}.`)
-  if (context.proposals[0]) lines.push(`Proposed action: ${context.proposals[0].title}. Review and approve before execution.`)
-  return lines.join("\n")
+function extractNamedTarget(prompt: string, verbs: string[]) {
+  const escaped = verbs.map((verb) => verb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  const match = prompt.match(new RegExp(`\\b(?:${escaped})\\b\\s+(?:to\\s+|for\\s+)?([A-Za-z0-9@._' -]{2,80})`, "i"))
+  return (match?.[1] || "").replace(/\b(and|about|regarding|with|please|then|also)\b.*$/i, "").replace(/\s+/g, " ").trim()
+}
+
+function parseToolPayload(result: any) {
+  const text = result?.content?.[0]?.text
+  if (typeof text !== "string") return result
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { message: text }
+  }
+}
+
+type DirectWorkflowResult = {
+  kind: string
+  ok: boolean
+  message: string
+}
+
+function interactiveBlock(prompt: {
+  type: "yes_no" | "single_choice" | "multi_choice"
+  title: string
+  options: Array<{ label: string; value: string }>
+}) {
+  return `\n\n\`\`\`json\n${JSON.stringify({ interactive: prompt })}\n\`\`\``
+}
+
+function directWorkflowReply(results: DirectWorkflowResult[]) {
+  const lines = ["Handled direct CRM task(s):"]
+  for (const result of results) {
+    lines.push(`- ${result.ok ? "Done" : "Failed"}: ${result.kind}. ${result.message}`)
+  }
+
+  const hasFailure = results.some((result) => !result.ok)
+  const hasSuccess = results.some((result) => result.ok)
+
+  if (hasFailure && !hasSuccess) {
+    return (
+      lines.join("\n") +
+      interactiveBlock({
+        type: "single_choice",
+        title: "How should I continue?",
+        options: [
+          { label: "Find customer", value: "Find the right customer record for this task and show the closest matches." },
+          { label: "Change task", value: "Show the next CRM tasks I can run from the current workspace." },
+          { label: "Try again", value: "Ask me only for the missing field needed to retry this task." },
+        ],
+      })
+    )
+  }
+
+  return (
+    lines.join("\n") +
+    interactiveBlock({
+      type: "single_choice",
+      title: "What next?",
+      options: [
+        { label: "Review approvals", value: "Show pending approval actions and ask which one I should approve, edit, or reject." },
+        { label: "Adjust draft", value: "Help me adjust the draft or action you just prepared." },
+        { label: "Next CRM task", value: "Show the next concrete CRM task I should run from current data." },
+      ],
+    })
+  )
+}
+
+function modelFailureReply(error: unknown, context: CRMAgentContext | null) {
+  const message = error instanceof Error ? error.message : "Unknown model error"
+  const dataLine = context
+    ? `CRM data loaded: ${context.snapshot.customerCount} customers, ${context.snapshot.surveyCount} surveys, ${context.snapshot.emailCount} saved emails.`
+    : "CRM data did not load."
+  return `Agent model failed: ${message}\n${dataLine}\nNo fallback answer was generated. Fix model/API configuration or use a direct task like "create a survey" or "email Dan".`
+}
+
+async function runDirectWorkflows(user: any, prompt: string, request: NextRequest): Promise<DirectWorkflowResult[]> {
+  const results: DirectWorkflowResult[] = []
+  const wantsSurvey = /\b(create|make|build|draft|launch)\b[\s\S]{0,80}\bsurvey\b|\bsurvey\b[\s\S]{0,80}\b(create|make|build|draft|launch)\b/i.test(prompt)
+  const wantsEmail = /\b(email|send email|draft email|write email)\b/i.test(prompt)
+  const wantsDonorResearch = /\b(donor research|research donor|research this donor|donorsearch|wealth screen|wealth screening)\b/i.test(prompt)
+
+  if (wantsSurvey) {
+    try {
+      const payload = parseToolPayload(await callCRMTool(user, "crm.create_native_survey", { topic: prompt }, request))
+      results.push({
+        kind: "survey",
+        ok: Boolean(payload.ok),
+        message: payload.survey?.title ? `Created "${payload.survey.title}".` : payload.message || payload.error || "Survey workflow completed.",
+      })
+    } catch (error: any) {
+      results.push({ kind: "survey", ok: false, message: error?.message || "Survey creation failed." })
+    }
+  }
+
+  if (wantsEmail) {
+    const target = extractNamedTarget(prompt, ["email", "send email", "draft email", "write email"])
+    if (!target) {
+      results.push({ kind: "email", ok: false, message: "Recipient name or email missing." })
+    } else {
+      try {
+        const payload = parseToolPayload(
+          await callCRMTool(user, "crm.prepare_email_to_customer", { customer: target, topic: prompt }, request),
+        )
+        results.push({
+          kind: "email",
+          ok: Boolean(payload.ok),
+          message: payload.proposal
+            ? `Prepared "${payload.proposal.title}" for approval.`
+            : payload.message || payload.lookup?.message || payload.error || "Email workflow did not prepare a sendable proposal.",
+        })
+      } catch (error: any) {
+        results.push({ kind: "email", ok: false, message: error?.message || "Email preparation failed." })
+      }
+    }
+  }
+
+  if (wantsDonorResearch) {
+    try {
+      const target = extractNamedTarget(prompt, ["research", "donor research", "research donor"]) || prompt
+      const payload = parseToolPayload(
+        await callCRMTool(user, "crm.prepare_donor_research", { customer: target, researchGoal: prompt }, request),
+      )
+      results.push({
+        kind: "donor research",
+        ok: Boolean(payload.ok),
+        message: payload.proposal
+          ? `Prepared "${payload.proposal.title}" for approval.`
+          : payload.message || payload.readiness?.message || payload.error || "Donor research workflow completed.",
+      })
+    } catch (error: any) {
+      results.push({ kind: "donor research", ok: false, message: error?.message || "Donor research preparation failed." })
+    }
+  }
+
+  return results
 }
 
 async function serializeChats(userId: string) {
@@ -386,7 +523,7 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json().catch(() => ({}))) as {
       content?: string
-      mode?: "chat" | "execute_action" | "refresh" | "new_chat"
+      mode?: "chat" | "execute_action" | "reject_action" | "save_action" | "refresh" | "new_chat"
       chatId?: string
       action?: CRMActionProposal
       enabledSkills?: string[]
@@ -451,11 +588,51 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    if (mode === "reject_action") {
+      if (!body.action?.id) return NextResponse.json({ error: "action.id is required" }, { status: 400 })
+      await rejectCRMAction(user, body.action.id)
+      const context = await buildCRMAgentContext(user, "action rejected", request)
+      const chat = await resolveChat(user.id, body.chatId, "CRM agent session")
+      if (chat) {
+        await supabase.from("analytics_assistant_messages").insert({
+          user_id: user.id,
+          chat_id: chat.id,
+          role: "assistant",
+          content: `Rejected action: ${body.action.title}`,
+          created_at: new Date().toISOString(),
+        })
+        await touchChat(chat.id)
+      }
+      const chats = await serializeChats(user.id)
+      const messages = chat ? await listMessages(chat.id) : []
+      return NextResponse.json({
+        context,
+        workspace: context,
+        toolStatuses: context.statuses,
+        proposals: context.proposals,
+        chats,
+        activeChatId: chat?.id || null,
+        messages: messages.map((message) => ({ id: message.id, role: message.role, content: message.content, created_at: message.created_at })),
+      })
+    }
+
+    if (mode === "save_action") {
+      if (!body.action?.id) return NextResponse.json({ error: "action.id is required" }, { status: 400 })
+      await saveCRMActionProposal(user, body.action)
+      const context = await buildCRMAgentContext(user, `saved action ${body.action.title}`, request)
+      return NextResponse.json({
+        context,
+        workspace: context,
+        toolStatuses: context.statuses,
+        proposals: context.proposals,
+      })
+    }
+
     const content = typeof body.content === "string" ? body.content.trim() : ""
     if (!content) return NextResponse.json({ error: "content is required for chat messages" }, { status: 400 })
 
-    const context = await buildCRMAgentContext(user, content, request)
-    const firstTitle = content.length > 8 ? content : context.proposals[0]?.title || "CRM agent session"
+    const directResults = await runDirectWorkflows(user, content, request)
+    const firstTitle = content.length > 8 ? content : "CRM agent session"
     const chat = await resolveChat(user.id, body.chatId, firstTitle)
     if (!chat) return NextResponse.json({ error: "Failed to create chat" }, { status: 500 })
 
@@ -470,6 +647,44 @@ export async function POST(request: NextRequest) {
     })
     await touchChat(chat.id, chat.title === "CRM agent session" ? firstTitle : undefined)
 
+    if (directResults.length > 0) {
+      const reply = directWorkflowReply(directResults)
+      await supabase.from("analytics_assistant_messages").insert({
+        user_id: user.id,
+        chat_id: chat.id,
+        role: "assistant",
+        content: reply,
+        created_at: new Date().toISOString(),
+      })
+      await touchChat(chat.id)
+
+      const [updatedMessages, chats, updatedChat, updatedContext] = await Promise.all([
+        listMessages(chat.id),
+        serializeChats(user.id),
+        getChat(user.id, chat.id),
+        buildCRMAgentContext(user, content, request),
+      ])
+
+      return NextResponse.json({
+        reply,
+        messages: updatedMessages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          created_at: message.created_at,
+        })),
+        chats,
+        activeChatId: chat.id,
+        chat: updatedChat,
+        context: updatedContext,
+        workspace: updatedContext,
+        toolStatuses: updatedContext.statuses,
+        proposals: updatedContext.proposals,
+        skills: DEFAULT_AGENT_SKILLS,
+      })
+    }
+
+    const context = await buildCRMAgentContext(user, content, request)
     const rollingSummary = await getRollingSummary(chat.id)
     const messages = await listMessages(chat.id)
     const inputMessages = buildChatMessages({
@@ -501,16 +716,18 @@ export async function POST(request: NextRequest) {
               skills: DEFAULT_AGENT_SKILLS,
             })
 
+            let modelError: unknown = null
             try {
               if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
               reply = await runAgentCompletion({ user, request, messages: inputMessages })
               if (reply) send("delta", { delta: reply })
             } catch (error) {
-              console.warn("Assistant stream failed, using fallback:", error)
+              modelError = error
+              console.warn("Assistant stream failed:", error)
             }
 
             if (!reply) {
-              reply = fallbackReply(context)
+              reply = modelFailureReply(modelError || new Error("Model returned empty reply"), context)
               send("delta", { delta: reply })
             }
 
@@ -558,14 +775,16 @@ export async function POST(request: NextRequest) {
     }
 
     let reply = ""
+    let modelError: unknown = null
     try {
       if (!process.env.OPENROUTER_KEY) throw new Error("OPENROUTER_KEY is missing")
       reply = await runAgentCompletion({ user, request, messages: inputMessages })
     } catch (error) {
-      console.warn("Assistant model failed, using fallback:", error)
+      modelError = error
+      console.warn("Assistant model failed:", error)
     }
 
-    if (!reply) reply = fallbackReply(context)
+    if (!reply) reply = modelFailureReply(modelError || new Error("Model returned empty reply"), context)
 
     await supabase.from("analytics_assistant_messages").insert({
       user_id: user.id,

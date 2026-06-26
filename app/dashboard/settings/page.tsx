@@ -629,10 +629,10 @@ export default function SettingsPage() {
               <div>
                 <h2 className="text-xl font-semibold">Connected Tools</h2>
                 <p className="text-sm text-muted-foreground">
-                  Choose which outside tools the agent can prepare work for. Nothing is sent outside SleekCRM until setup and approval are complete.
+                  Connected tools include Gmail and in-platform config tools. Future tools such as accounting, SMS, calendar, survey, donor research, etc. will be listed here.
                 </p>
               </div>
-              <ConnectedToolsPanel />
+              {/* <ConnectedToolsPanel /> */}
             </div>
           </motion.div>
         </TabsContent>

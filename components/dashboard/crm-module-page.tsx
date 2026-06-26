@@ -98,6 +98,18 @@ function humanize(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
+function displayCellValue(column: string, value: any) {
+  if (value == null || value === "") return "-"
+  if (typeof value === "boolean") return value ? "Yes" : "No"
+  if (/(_at|_date|date|starts_at|checked_in_at)$/i.test(column) && typeof value === "string") return safeDate(value)
+  if (column.includes("amount") && (typeof value === "number" || typeof value === "string")) {
+    const amount = Number(value)
+    return Number.isFinite(amount) ? amount.toLocaleString("en-US", { style: "currency", currency: "USD" }) : value
+  }
+  if (typeof value === "object") return JSON.stringify(value)
+  return String(value)
+}
+
 function firstText(row: Record<string, any>, keys: string[]) {
   for (const key of keys) {
     if (row[key] != null && row[key] !== "") return String(row[key])
@@ -117,7 +129,7 @@ function ModuleTable({ title, description, rows, columns }: { title: string; des
           <TableHeader>
             <TableRow>
               {columns.map((column) => (
-                <TableHead key={column}>{column}</TableHead>
+                <TableHead key={column}>{humanize(column)}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -127,7 +139,7 @@ function ModuleTable({ title, description, rows, columns }: { title: string; des
                 {columns.map((column) => {
                   const key = column.toLowerCase().replace(/\s+/g, "_")
                   const value = row[key] ?? row[column] ?? row[column.toLowerCase()]
-                  return <TableCell key={column}>{typeof value === "object" ? JSON.stringify(value) : value ?? "-"}</TableCell>
+                  return <TableCell key={column}>{displayCellValue(key, value)}</TableCell>
                 })}
               </TableRow>
             ))}
@@ -365,7 +377,7 @@ function ReportsModule() {
         <Readiness title="KPI Cards" icon={Activity} text="Dashboard widgets support KPI, chart, and table config." />
         <Readiness title="CSV Export" icon={Download} text="Export logs are scaffolded through audit and usage event tables." />
         <Readiness title="Relational Reports" icon={BarChart3} text="Definitions can query linked CRM objects and module tables." />
-        <Readiness title="AI Insights" icon={CheckCircle2} text="Agent can draft report definitions for approval." />
+        <Readiness title="Agent Actions" icon={CheckCircle2} text="Agent can draft report definitions for approval." />
       </div>
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="space-y-6">
@@ -401,6 +413,7 @@ function ReportsModule() {
 }
 
 function FundraisingModule() {
+  const [researchRequests, setResearchRequests] = useState<any[]>([])
   const [donations, setDonations] = useState<any[]>([])
   const [campaigns, setCampaigns] = useState<any[]>([])
   const [funds, setFunds] = useState<any[]>([])
@@ -409,7 +422,8 @@ function FundraisingModule() {
   const [registrations, setRegistrations] = useState<any[]>([])
 
   const load = async () => {
-    const [donationRes, campaignRes, fundsRes, pledgesRes, eventRes, regRes] = await Promise.all([
+    const [researchRes, donationRes, campaignRes, fundsRes, pledgesRes, eventRes, regRes] = await Promise.all([
+      fetch("/api/crm/modules/donorResearch"),
       fetch("/api/crm/modules/donations"),
       fetch("/api/crm/modules/campaigns"),
       fetch("/api/crm/modules/funds"),
@@ -417,6 +431,7 @@ function FundraisingModule() {
       fetch("/api/crm/modules/events"),
       fetch("/api/crm/modules/eventRegistrations"),
     ])
+    setResearchRequests((await researchRes.json()).rows || [])
     setDonations((await donationRes.json()).rows || [])
     setCampaigns((await campaignRes.json()).rows || [])
     setFunds((await fundsRes.json()).rows || [])
@@ -430,21 +445,31 @@ function FundraisingModule() {
   }, [])
 
   return (
-    <Tabs defaultValue="donations" className="space-y-6">
-      <TabsList className="grid w-full grid-cols-3 md:grid-cols-6">
+    <Tabs defaultValue="research" className="space-y-6">
+      <TabsList className="grid w-full grid-cols-3 md:grid-cols-5">
+        <TabsTrigger value="research">Research</TabsTrigger>
         <TabsTrigger value="donations">Donations</TabsTrigger>
         <TabsTrigger value="campaigns">Campaigns</TabsTrigger>
         <TabsTrigger value="funds">Funds</TabsTrigger>
         <TabsTrigger value="pledges">Pledges</TabsTrigger>
-        <TabsTrigger value="events">Events</TabsTrigger>
-        <TabsTrigger value="attendees">Attendees</TabsTrigger>
       </TabsList>
+      <TabsContent value="research" className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-3">
+          <Readiness title="Donor Research Queue" icon={HeartHandshake} text="Agent-prepared research requests are reviewable before any donor profile changes." />
+          <Readiness title="DonorSearch Shell" icon={ShieldCheck} text="The adapter is readiness-only until private API docs and server-side credentials are configured." />
+          <Readiness title="Connection Work" icon={UserCheck} text="Use research output to prepare introductions, stewardship notes, and follow-up tasks." />
+        </div>
+        <ModuleTable
+          title="Donor Research Requests"
+          description="No live enrichment runs from this table. Requests preserve target, goal, readiness, and review status."
+          rows={researchRequests}
+          columns={["provider_key", "status", "customer_id", "created_at"]}
+        />
+      </TabsContent>
       <TabsContent value="donations"><ModuleTable title="Donations" description="Internal gift records work now. Online payment processing is not active until connected." rows={donations} columns={["amount", "currency", "donation_date", "payment_status", "receipt_status"]} /></TabsContent>
       <TabsContent value="campaigns"><ModuleTable title="Campaigns" description="Campaigns can link to donations, events, forms, surveys, and tasks." rows={campaigns} columns={["name", "campaign_type", "goal_amount", "status"]} /></TabsContent>
       <TabsContent value="funds"><ModuleTable title="Funds / Designations" description="Funds let donations map to designations without making the app nonprofit-only." rows={funds} columns={["name", "is_active", "created_at"]} /></TabsContent>
       <TabsContent value="pledges"><ModuleTable title="Pledges" description="Pledge and recurring gift records are separate from live payment processing." rows={pledges} columns={["amount", "currency", "due_date", "status"]} /></TabsContent>
-      <TabsContent value="events"><ModuleTable title="Events" description="Events can attach to campaigns and later sync to a connected calendar." rows={events} columns={["name", "starts_at", "location", "status"]} /></TabsContent>
-      <TabsContent value="attendees"><ModuleTable title="Attendees" description="Check-in status lives on event registrations." rows={registrations} columns={["attendee_name", "attendee_email", "status", "checked_in_at"]} /></TabsContent>
     </Tabs>
   )
 }

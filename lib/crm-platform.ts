@@ -303,7 +303,7 @@ export async function listObjectTypes(user: CRMUserContext) {
   const businessId = requireBusiness(user)
   const { data, error } = await supabase
     .from("crm_object_types")
-    .select("*, crm_field_definitions(*)")
+    .select("*, crm_field_definitions!crm_field_definitions_object_type_id_fkey(*)")
     .eq("business_id", businessId)
     .eq("is_active", true)
     .order("module", { ascending: true })
@@ -383,7 +383,7 @@ export async function getObjectTypeWithFields(user: CRMUserContext, objectTypeId
   const businessId = requireBusiness(user)
   const { data, error } = await supabase
     .from("crm_object_types")
-    .select("*, crm_field_definitions(*)")
+    .select("*, crm_field_definitions!crm_field_definitions_object_type_id_fkey(*)")
     .eq("business_id", businessId)
     .eq("id", objectTypeId)
     .single()
@@ -482,7 +482,7 @@ export async function getRecord(user: CRMUserContext, id: string) {
   const [{ data: record, error }, { data: engagements }, { data: relationships }] = await Promise.all([
     supabase
       .from("crm_records")
-      .select("*, crm_object_types(*, crm_field_definitions(*))")
+      .select("*, crm_object_types(*, crm_field_definitions!crm_field_definitions_object_type_id_fkey(*))")
       .eq("business_id", businessId)
       .eq("id", id)
       .single(),

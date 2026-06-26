@@ -1,6 +1,5 @@
-import nodemailer from "nodemailer"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
-import { getEffectiveEmailCredentials } from "@/lib/email-settings"
+import { sendEmailWithProvider } from "@/lib/server-email-provider"
 import type { NextRequest } from "next/server"
 
 type UserContext = {
@@ -105,21 +104,6 @@ function clampConfidence(value: number) {
 function safeText(value: unknown) {
   if (typeof value !== "string") return ""
   return value.replace(/\s+/g, " ").trim()
-}
-
-function getSmtpConfigFromDomain(email: string, password: string) {
-  const emailDomain = email.split("@")[1]?.toLowerCase() || ""
-  const base = { auth: { user: email, pass: password } }
-  if (emailDomain === "gmail.com") {
-    return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
-  }
-  if (["outlook.com", "hotmail.com", "live.com"].includes(emailDomain) || emailDomain.endsWith("office365.com")) {
-    return { host: "smtp-mail.outlook.com", port: 587, secure: false, ...base }
-  }
-  if (["yahoo.com", "ymail.com"].includes(emailDomain)) {
-    return { host: "smtp.mail.yahoo.com", port: 587, secure: false, ...base }
-  }
-  return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
 }
 
 async function loadWorkspaceSnapshot(user: UserContext) {
@@ -433,35 +417,15 @@ export async function executeWorkspaceAction(user: UserContext, action: Workspac
       return { ok: false, error: "No recipients available for this email" }
     }
 
-    const credentials = await getEffectiveEmailCredentials(request)
-    if (!credentials) {
-      return {
-        ok: false,
-        error: "Email not configured. Set SMTP credentials in Settings before sending.",
-        needsCredentials: true,
-      }
-    }
-
-    const smtpConfig =
-      credentials.smtp?.host && credentials.smtp?.port != null
-        ? {
-            host: credentials.smtp.host,
-            port: credentials.smtp.port,
-            secure: credentials.smtp.secure ?? false,
-            auth: { user: credentials.email, pass: credentials.password },
-          }
-        : getSmtpConfigFromDomain(credentials.email, credentials.password)
-
-    const transporter = nodemailer.createTransport(smtpConfig)
-    await transporter.sendMail({
-      from: credentials.email,
+    const result = await sendEmailWithProvider(request, {
       to: recipients.map((recipient: { email: string }) => recipient.email),
       subject: action.payload.subject,
       html: action.payload.html,
       text: action.payload.text,
     })
+    if (!result.ok) return result
 
-    return { ok: true, message: `Email sent to ${recipients.length} recipient(s)` }
+    return { ok: true, message: result.message }
   }
 
   if (action.kind === "customer_update") {

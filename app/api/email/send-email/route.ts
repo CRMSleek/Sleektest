@@ -1,26 +1,9 @@
 import { NextResponse } from "next/server"
-import { getEffectiveEmailCredentials } from "@/lib/email-settings"
-import nodemailer from "nodemailer"
-
-function getSmtpConfigFromDomain(email: string, password: string) {
-  const emailDomain = email.split("@")[1]?.toLowerCase() || ""
-  const base = { auth: { user: email, pass: password } }
-  if (emailDomain === "gmail.com") {
-    return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
-  }
-  if (["outlook.com", "hotmail.com", "live.com"].includes(emailDomain) || emailDomain.endsWith("office365.com")) {
-    return { host: "smtp-mail.outlook.com", port: 587, secure: false, ...base }
-  }
-  if (["yahoo.com", "ymail.com"].includes(emailDomain)) {
-    return { host: "smtp.mail.yahoo.com", port: 587, secure: false, ...base }
-  }
-  return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
-}
+import { getEmailProviderReadiness, sendEmailWithProvider } from "@/lib/server-email-provider"
 
 export async function POST(request: Request) {
-  const credentials = await getEffectiveEmailCredentials(request as any)
-
-  if (!credentials) {
+  const readiness = await getEmailProviderReadiness(request)
+  if (!readiness.ready) {
     return NextResponse.json(
       { error: "Email not configured. Please configure SMTP/IMAP in Settings with an app-specific password." },
       { status: 401 },
@@ -38,18 +21,6 @@ export async function POST(request: Request) {
   }
 
   try {
-    const smtpConfig =
-      credentials.smtp?.host && credentials.smtp?.port != null
-        ? {
-            host: credentials.smtp.host,
-            port: credentials.smtp.port,
-            secure: credentials.smtp.secure ?? false,
-            auth: { user: credentials.email, pass: credentials.password },
-          }
-        : getSmtpConfigFromDomain(credentials.email, credentials.password)
-
-    const transporter = nodemailer.createTransport(smtpConfig)
-
     const attachments = await Promise.all(
       (files || []).map(async (f: any) => ({
         filename: f.name,
@@ -57,25 +28,20 @@ export async function POST(request: Request) {
       })),
     )
 
-    const mailOptions: any = {
-      from: credentials.email,
+    const result = await sendEmailWithProvider(request, {
       to: to.split(",").map((email: string) => email.trim()),
       cc: cc ? cc.split(",").map((email: string) => email.trim()) : undefined,
       bcc: bcc ? bcc.split(",").map((email: string) => email.trim()) : undefined,
       subject: subject,
       html: body,
-      attachments: attachments.length > 0 ? attachments : undefined,
-    }
+      text: body,
+      attachments,
+      replyToMessageId: mode === "reply" ? originalEmailId || threadId : null,
+    })
 
-    // Add reply headers if replying
-    if (mode === "reply" && originalEmailId) {
-      // For SMTP, we can add In-Reply-To and References headers
-      // Note: originalEmailId might be a UID from IMAP, so we'll use it as Message-ID if available
-      mailOptions.inReplyTo = `<${originalEmailId}@sleekcrm>`
-      mailOptions.references = `<${originalEmailId}@sleekcrm>`
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.needsCredentials ? 401 : 400 })
     }
-
-    await transporter.sendMail(mailOptions)
 
     return NextResponse.json({ success: true })
   } catch (err: any) {

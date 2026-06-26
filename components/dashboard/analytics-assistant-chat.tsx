@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Send, Sparkles } from "lucide-react"
 import { motion } from "framer-motion"
+import { InteractivePromptBlock } from "@/components/dashboard/agent-interactive-prompt"
+import { parseInteractiveFromAssistant } from "@/lib/agent-interactive-prompts"
 
 type ChatMessage = {
   id: string
@@ -41,6 +43,7 @@ export function AnalyticsAssistantChat() {
   const [input, setInput] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [answeredInteractions, setAnsweredInteractions] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const load = async () => {
@@ -71,8 +74,8 @@ export function AnalyticsAssistantChat() {
     void load()
   }, [])
 
-  const handleSend = async () => {
-    const trimmed = input.trim()
+  const sendMessage = async (content: string) => {
+    const trimmed = content.trim()
     if (!trimmed || isSending) return
 
     const optimisticUser: ChatMessage = {
@@ -130,6 +133,10 @@ export function AnalyticsAssistantChat() {
     }
   }
 
+  const handleSend = async () => {
+    await sendMessage(input)
+  }
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
@@ -146,7 +153,7 @@ export function AnalyticsAssistantChat() {
             SleekCRM Assistant
           </CardTitle>
           <CardDescription>
-            Chat with an AI assistant about your analytics and customer insights. History is saved to your account.
+            Chat with an AI assistant about your analytics, customers, and next CRM actions. History is saved to your account.
           </CardDescription>
         </div>
       </CardHeader>
@@ -156,30 +163,50 @@ export function AnalyticsAssistantChat() {
             {!historyLoaded && (
               <p className="text-sm text-muted-foreground">Loading conversation…</p>
             )}
-            {messages.map((message, index) => (
-              <motion.div
-                key={message.id}
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                custom={index}
-                className={`flex flex-col gap-2 ${
-                  message.role === "user" ? "items-end" : "items-start"
-                }`}
-              >
-                {message.content && (
-                  <div
-                    className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
-                    }`}
-                  >
-                    {message.content}
-                  </div>
-                )}
-              </motion.div>
-            ))}
+            {messages.map((message, index) => {
+              const parsed =
+                message.role === "assistant"
+                  ? parseInteractiveFromAssistant(message.content)
+                  : { text: message.content, interactive: null }
+              const textContent = parsed.text || (parsed.interactive ? "" : message.content)
+              const answeredLabel = answeredInteractions[message.id]
+
+              return (
+                <motion.div
+                  key={message.id}
+                  variants={fadeUp}
+                  initial="hidden"
+                  animate="visible"
+                  custom={index}
+                  className={`flex flex-col gap-2 ${
+                    message.role === "user" ? "items-end" : "items-start"
+                  }`}
+                >
+                  {textContent && (
+                    <div
+                      className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                        message.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-foreground"
+                      }`}
+                    >
+                      {textContent}
+                    </div>
+                  )}
+                  {parsed.interactive ? (
+                    <InteractivePromptBlock
+                      prompt={parsed.interactive}
+                      disabled={isSending || Boolean(answeredLabel)}
+                      answeredLabel={answeredLabel}
+                      onSelect={(value, label) => {
+                        setAnsweredInteractions((current) => ({ ...current, [message.id]: label }))
+                        void sendMessage(value)
+                      }}
+                    />
+                  ) : null}
+                </motion.div>
+              )
+            })}
           </div>
         </ScrollArea>
 

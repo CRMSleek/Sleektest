@@ -31,6 +31,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { InteractivePromptBlock } from "@/components/dashboard/agent-interactive-prompt"
+import { parseInteractiveFromAssistant } from "@/lib/agent-interactive-prompts"
 
 type MetricWithChange = {
   value: number
@@ -181,24 +183,8 @@ function buildPlaceholderRows(data: AnalyticsData | null) {
 }
 
 function parseAgentMessage(content: string) {
-  const jsonBlockRegex = /```json\s+([\s\S]*?)\s+```/g;
-  let match;
-  let textContent = content;
-  let actionPayload = null;
-
-  while ((match = jsonBlockRegex.exec(content)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]);
-      if (parsed && parsed.proposedAction) {
-        actionPayload = parsed.proposedAction;
-        textContent = textContent.replace(match[0], '');
-      }
-    } catch (e) {
-      // Ignore invalid JSON or unrelated JSON blocks
-    }
-  }
-
-  return { textContent: textContent.trim(), actionPayload };
+  const parsed = parseInteractiveFromAssistant(content)
+  return { textContent: parsed.text || content.trim(), interactive: parsed.interactive }
 }
 
 function deriveTasks(data: AnalyticsData | null): TaskItem[] {
@@ -436,7 +422,7 @@ function ChatHistoryModal({
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
-  const [hasGenerated, setHasGenerated] = useState(false)
+  const [hasStarted, setHasStarted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([WELCOME])
@@ -454,6 +440,7 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
   const [status, setStatus] = useState("")
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false)
   const [attachments, setAttachments] = useState<UploadedFile[]>([])
+  const [answeredInteractions, setAnsweredInteractions] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -566,10 +553,14 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
 
   useEffect(() => {
     void loadAnalytics()
+    void (async () => {
+      setHasStarted(true)
+      await loadChat()
+    })()
   }, [])
 
   const activateAgent = async () => {
-    setHasGenerated(true)
+    setHasStarted(true)
     setStatus("Creating new chat...")
     try {
       const response = await fetch("/api/analytics/assistant", {
@@ -579,7 +570,7 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
       })
       const json = (await response.json()) as AssistantResponse
 
-      if (!response.ok) throw new Error(json.error || "Failed to generate insights")
+      if (!response.ok) throw new Error(json.error || "Failed to create chat")
 
       setData(json.workspace || null)
       setChats(json.chats || [])
@@ -589,7 +580,7 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
       setStatus("")
       await loadChat(json.activeChatId || json.chat?.id || undefined)
     } catch (error) {
-      console.error("Generate insights failed:", error)
+      console.error("New chat failed:", error)
       setStatus("Could not create a new chat.")
     }
   }
@@ -638,7 +629,7 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
     const trimmed = content.trim()
     if ((!trimmed && attachments.length === 0) || sending) return
 
-    if (!hasGenerated) setHasGenerated(true)
+    if (!hasStarted) setHasStarted(true)
 
     const optimisticUserMessage: AgentMessage = {
       id: crypto.randomUUID(),
@@ -747,31 +738,6 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
       // On failure, reload chats
       void loadChat(activeChatId || undefined)
     }
-  }
-
-  // ─── Welcome screen ───────────────────────────────────────────────────────────
-  if (!hasGenerated) {
-    return (
-      <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-background">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.16),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(168,85,247,0.12),transparent_28%),linear-gradient(180deg,rgba(2,6,23,0.98),rgba(3,7,18,1))]" />
-        <Card className="relative z-10 mx-4 w-full max-w-2xl rounded-3xl border-white/10 bg-black/35 p-3 shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-          <CardContent className="flex flex-col items-center gap-4 px-6 py-10 text-center md:px-10">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-              <Sparkles className="h-6 w-6 text-cyan-300" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">Generate insights</h2>
-              <p className="text-sm leading-6 text-white/60">Open a new chat, then work through the task checklist.</p>
-            </div>
-            <Button onClick={activateAgent} disabled={loading} size="lg" className="rounded-full px-6">
-              <Wand2 className="mr-2 h-4 w-4" />
-              {loading ? "Loading..." : "Generate insights"}
-            </Button>
-            {status ? <p className="text-xs text-white/45">{status}</p> : null}
-          </CardContent>
-        </Card>
-      </div>
-    )
   }
 
   // ─── Main layout ──────────────────────────────────────────────────────────────
@@ -995,9 +961,10 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 px-5 py-5">
               {messages.map((message, index) => {
-                const { textContent, actionPayload } = message.role === "assistant" 
-                  ? parseAgentMessage(message.content) 
-                  : { textContent: message.content, actionPayload: null }
+                const { textContent, interactive } = message.role === "assistant"
+                  ? parseAgentMessage(message.content)
+                  : { textContent: message.content, interactive: null }
+                const answeredLabel = answeredInteractions[message.id]
 
                 return (
                   <motion.div
@@ -1064,25 +1031,17 @@ export function AnalyticsAgentTab({ closeHref }: { closeHref?: string } = {}) {
                     </div>
 
                     {/* Interactive Action Block */}
-                    {actionPayload && (
-                      <div className="mt-3 max-w-[85%] rounded-xl border border-primary/20 bg-card p-4 shadow-sm">
-                        <p className="mb-3 text-sm font-semibold">{actionPayload.title}</p>
-                        <div className="flex flex-wrap gap-2">
-                          {actionPayload.options.map((opt: any, i: number) => (
-                            <Button
-                              key={i}
-                              size="sm"
-                              variant={i === 0 ? "default" : "outline"}
-                              className="rounded-full text-xs"
-                              onClick={() => void sendChat(opt.value)}
-                              disabled={sending}
-                            >
-                              {opt.label}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {interactive ? (
+                      <InteractivePromptBlock
+                        prompt={interactive}
+                        disabled={sending || Boolean(answeredLabel)}
+                        answeredLabel={answeredLabel}
+                        onSelect={(value, label) => {
+                          setAnsweredInteractions((current) => ({ ...current, [message.id]: label }))
+                          void sendChat(value)
+                        }}
+                      />
+                    ) : null}
                   </motion.div>
                 )
               })}

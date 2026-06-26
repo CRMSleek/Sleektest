@@ -1,9 +1,8 @@
 import { createHash } from "crypto"
-import nodemailer from "nodemailer"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
-import { getEffectiveEmailCredentials } from "@/lib/email-settings"
 import { fetchRelevantInboxEmailsForAnalysis, saveEmailsForAnalysis } from "@/lib/email-analysis-selection"
 import { buildPlatformSummary, getIntegrationSummary } from "@/lib/crm-platform"
+import { getEmailProviderReadiness, sendEmailWithProvider } from "@/lib/server-email-provider"
 import type { NextRequest } from "next/server"
 
 export type UserContext = {
@@ -51,7 +50,7 @@ export type AnalysisType =
   | "feature_requests"
   | "opportunities"
 
-export type CRMActionKind = "send_email" | "create_task" | "update_customer" | "create_report" | "create_survey"
+export type CRMActionKind = "send_email" | "create_task" | "update_customer" | "create_report" | "create_survey" | "prepare_donor_research"
 
 export type CRMActionProposal = {
   id: string
@@ -1135,18 +1134,189 @@ export function proposeActions(context: {
   return proposals.slice(0, 4)
 }
 
-function getSmtpConfigFromDomain(email: string, password: string) {
-  const emailDomain = email.split("@")[1]?.toLowerCase() || ""
-  const base = { auth: { user: email, pass: password } }
-  if (emailDomain === "gmail.com") return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
-  if (["outlook.com", "hotmail.com", "live.com"].includes(emailDomain) || emailDomain.endsWith("office365.com")) {
-    return { host: "smtp-mail.outlook.com", port: 587, secure: false, ...base }
+function proposalStatusFromApproval(status: string): CRMActionProposal["status"] {
+  if (status === "completed") return "completed"
+  if (status === "rejected") return "rejected"
+  if (status === "approved") return "approved"
+  return "proposed"
+}
+
+async function persistActionProposals(user: UserContext, proposals: CRMActionProposal[]) {
+  const businessId = user.business?.id
+  if (!businessId || proposals.length === 0) return proposals
+
+  const rows = proposals.map((proposal) => ({
+    business_id: businessId,
+    user_id: user.id,
+    action_kind: proposal.kind,
+    title: proposal.title,
+    reasoning: proposal.reasoning,
+    evidence: proposal.evidence,
+    payload: { ...proposal.payload, proposalId: proposal.payload?.proposalId || proposal.id, draft: proposal.draft || null },
+    status: proposal.status === "proposed" ? "pending" : proposal.status,
+  }))
+
+  const proposalIds = rows.map((row) => row.payload.proposalId)
+  const { data: existingRows, error: existingError } = await supabase
+    .from("crm_ai_action_approvals")
+    .select("id, payload")
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .in("status", ["pending", "approved"])
+
+  if (existingError) {
+    console.warn("persistActionProposals lookup:", existingError)
+    return proposals
   }
-  if (["yahoo.com", "ymail.com"].includes(emailDomain)) return { host: "smtp.mail.yahoo.com", port: 587, secure: false, ...base }
-  return { host: "smtp.gmail.com", port: 587, secure: false, ...base }
+
+  const existingIds = new Set((existingRows || []).map((row: any) => row.payload?.proposalId).filter(Boolean))
+  const missingRows = rows.filter((row) => !existingIds.has(row.payload.proposalId))
+  if (missingRows.length > 0) {
+    const { error } = await supabase.from("crm_ai_action_approvals").insert(missingRows)
+    if (error) {
+      console.warn("persistActionProposals insert:", error)
+      return proposals
+    }
+  }
+
+  const { data } = await supabase
+    .from("crm_ai_action_approvals")
+    .select("id, action_kind, title, reasoning, evidence, payload, status, created_at")
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .in("status", ["pending", "approved"])
+    .order("created_at", { ascending: false })
+
+  const byProposalId = new Map<string, any>()
+  for (const row of data || []) {
+    const proposalId = (row as any).payload?.proposalId
+    if (proposalId && proposalIds.includes(proposalId)) byProposalId.set(proposalId, row)
+  }
+  return proposals.map((proposal) => {
+    const proposalId = proposal.payload?.proposalId || proposal.id
+    const row = byProposalId.get(proposalId)
+    if (!row) return proposal
+    return {
+      ...proposal,
+      id: row.id,
+      kind: row.action_kind as CRMActionKind,
+      title: row.title,
+      reasoning: row.reasoning,
+      evidence: row.evidence || [],
+      payload: row.payload || {},
+      draft: row.payload?.draft || proposal.draft,
+      status: proposalStatusFromApproval(row.status),
+      createdAt: row.created_at,
+    }
+  })
+}
+
+async function listPendingActionApprovals(user: UserContext): Promise<CRMActionProposal[]> {
+  const businessId = user.business?.id
+  if (!businessId) return []
+  const { data, error } = await supabase
+    .from("crm_ai_action_approvals")
+    .select("id, action_kind, title, reasoning, evidence, payload, status, created_at")
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .in("status", ["pending", "approved"])
+    .order("created_at", { ascending: false })
+    .limit(20)
+
+  if (error) {
+    console.warn("listPendingActionApprovals:", error)
+    return []
+  }
+
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    kind: row.action_kind as CRMActionKind,
+    title: row.title,
+    status: proposalStatusFromApproval(row.status),
+    reasoning: row.reasoning || "",
+    evidence: row.evidence || [],
+    payload: row.payload || {},
+    draft: row.payload?.draft || row.payload?.text || "",
+    createdAt: row.created_at,
+  }))
+}
+
+async function markApprovalStarted(user: UserContext, action: CRMActionProposal) {
+  const businessId = user.business?.id
+  if (!businessId || !action.id) return null
+  const { data } = await supabase
+    .from("crm_ai_action_approvals")
+    .update({
+      status: "approved",
+      approved_by: user.id,
+      approved_at: new Date().toISOString(),
+      payload: { ...action.payload, draft: action.draft || action.payload?.draft || null },
+    })
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .eq("id", action.id)
+    .select("id")
+    .maybeSingle()
+  return data
+}
+
+async function markApprovalFinished(user: UserContext, action: CRMActionProposal, result: Record<string, any>) {
+  const businessId = user.business?.id
+  if (!businessId || !action.id) return
+  await supabase
+    .from("crm_ai_action_approvals")
+    .update({
+      status: result.ok ? "completed" : "approved",
+      executed_at: result.ok ? new Date().toISOString() : null,
+      execution_result: result,
+    })
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .eq("id", action.id)
+}
+
+export async function rejectCRMAction(user: UserContext, actionId: string) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const { error } = await supabase
+    .from("crm_ai_action_approvals")
+    .update({
+      status: "rejected",
+      execution_result: { rejectedAt: new Date().toISOString() },
+    })
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .eq("id", actionId)
+  if (error) throw error
+  return { ok: true }
+}
+
+export async function saveCRMActionProposal(user: UserContext, action: CRMActionProposal) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const { error } = await supabase
+    .from("crm_ai_action_approvals")
+    .update({
+      action_kind: action.kind,
+      title: safeText(action.title),
+      reasoning: safeText(action.reasoning),
+      evidence: action.evidence || [],
+      payload: { ...action.payload, draft: action.draft || action.payload?.draft || null },
+    })
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .eq("id", action.id)
+  if (error) throw error
+  return { ok: true }
 }
 
 export async function executeCRMAction(user: UserContext, action: CRMActionProposal, request: NextRequest) {
+  const approval = await markApprovalStarted(user, action)
+  const finish = async (result: { ok: boolean; message?: string; error?: string; [key: string]: any }) => {
+    await markApprovalFinished(user, action, result)
+    return result
+  }
+
   if (action.kind === "send_email") {
     const recipients = Array.isArray(action.payload.to) ? action.payload.to : []
     const uniqueRecipients = Array.from(
@@ -1160,33 +1330,18 @@ export async function executeCRMAction(user: UserContext, action: CRMActionPropo
           .map((recipient: { email: string; name?: string }) => [recipient.email, recipient]),
       ).values(),
     )
-    if (recipients.length === 0) return { ok: false, error: "No recipients available for email" }
+    if (recipients.length === 0) return finish({ ok: false, error: "No recipients available for email" })
     if (uniqueRecipients.length > 25 && action.payload.allowBulk !== true) {
-      return { ok: false, error: "Bulk email blocked. Set allowBulk only after explicit user request for a broad campaign." }
+      return finish({ ok: false, error: "Bulk email blocked. Set allowBulk only after explicit user request for a broad campaign." })
     }
-    const credentials = await getEffectiveEmailCredentials(request)
-    if (!credentials) {
-      return { ok: false, error: "Email not configured. Set SMTP credentials in Settings before sending.", needsCredentials: true }
-    }
-    const smtpConfig =
-      credentials.smtp?.host && credentials.smtp?.port != null
-        ? {
-            host: credentials.smtp.host,
-            port: credentials.smtp.port,
-            secure: credentials.smtp.secure ?? false,
-            auth: { user: credentials.email, pass: credentials.password },
-          }
-        : getSmtpConfigFromDomain(credentials.email, credentials.password)
 
-    const transporter = nodemailer.createTransport(smtpConfig)
-    await transporter.sendMail({
-      from: credentials.email,
+    const result = await sendEmailWithProvider(request, {
       to: uniqueRecipients.map((recipient: { email: string }) => recipient.email),
       subject: safeText(action.payload.subject),
       text: safeText(action.payload.text || action.draft),
       html: safeText(action.payload.html) || safeText(action.payload.text || action.draft).replace(/\n/g, "<br />"),
     })
-    return { ok: true, message: `Email sent to ${uniqueRecipients.length} recipient(s)` }
+    return finish(result.ok ? { ok: true, message: result.message } : result)
   }
 
   if (action.kind === "create_task") {
@@ -1200,21 +1355,21 @@ export async function executeCRMAction(user: UserContext, action: CRMActionPropo
       evidence: action.evidence,
       metadata: action.payload,
     })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, message: "CRM task created" }
+    if (error) return finish({ ok: false, error: error.message })
+    return finish({ ok: true, message: "CRM task created" })
   }
 
   if (action.kind === "update_customer") {
     const customerId = safeText(action.payload.customerId)
-    if (!customerId) return { ok: false, error: "No customerId supplied" }
+    if (!customerId) return finish({ ok: false, error: "No customerId supplied" })
     const updates = action.payload.updates || {}
     const { error } = await supabase
       .from("customers")
       .update(updates)
       .eq("id", customerId)
       .eq("business_id", user.business?.id || "")
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, message: "Customer record updated" }
+    if (error) return finish({ ok: false, error: error.message })
+    return finish({ ok: true, message: "Customer record updated" })
   }
 
   if (action.kind === "create_report") {
@@ -1228,8 +1383,8 @@ export async function executeCRMAction(user: UserContext, action: CRMActionPropo
       evidence: action.evidence,
       metadata: { ...action.payload, report: true },
     })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, message: "Report task created" }
+    if (error) return finish({ ok: false, error: error.message })
+    return finish({ ok: true, message: "Report task created" })
   }
 
   if (action.kind === "create_survey") {
@@ -1240,30 +1395,42 @@ export async function executeCRMAction(user: UserContext, action: CRMActionPropo
       questions: action.payload.questions || [],
       is_active: false,
     })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true, message: "Survey draft created" }
+    if (error) return finish({ ok: false, error: error.message })
+    return finish({ ok: true, message: "Survey draft created" })
   }
 
+  if (action.kind === "prepare_donor_research") {
+    const result = await createDonorResearchRequest(user, action.payload, action.reasoning, action.evidence)
+    return finish({ ok: true, message: "Donor research request prepared for review", request: result.request, readiness: result.readiness })
+  }
+
+  if (approval) return finish({ ok: false, error: "Unsupported action kind" })
   return { ok: false, error: "Unsupported action kind" }
 }
 
 export async function buildCRMAgentContext(user: UserContext, prompt: string, request?: NextRequest): Promise<CRMAgentContext> {
-  const analysisTypes = selectAnalysisTypes(prompt)
   const emailSelectionStatuses = await autoSelectEmailsForPrompt(user, prompt, request)
-  const [{ data, analyses, statuses }, platform] = await Promise.all([
-    runCachedAnalyses(user, analysisTypes),
-    loadPlatformContext(user),
-  ])
-  const proposals = proposeActions({ user, prompt, analyses, data })
+  const [data, platform] = await Promise.all([loadCRMData(user), loadPlatformContext(user)])
+  const pending = await listPendingActionApprovals(user)
+  const proposals = pending.filter((proposal) => proposal.status !== "completed" && proposal.status !== "rejected").slice(0, 8)
+
   return {
     snapshot: buildSnapshot(data),
     customers: data.customers.slice(0, 25),
     surveys: data.surveys.slice(0, 20),
     responses: data.responses.slice(0, 30),
     emails: data.emails.slice(0, 25),
-    analyses,
+    analyses: [],
     proposals,
-    statuses: [...emailSelectionStatuses, ...statuses],
+    statuses: [
+      ...emailSelectionStatuses,
+      {
+        id: "crm.query",
+        label: "CRM data query",
+        status: "complete",
+        detail: `${data.customers.length} customers, ${data.responses.length} survey responses, ${data.emails.length} saved emails`,
+      },
+    ],
     platform,
   }
 }
@@ -1346,6 +1513,7 @@ type CRMEntity =
   | "crm_suppression_list"
   | "crm_usage_events"
   | "crm_ai_action_approvals"
+  | "crm_donor_research_requests"
 
 const CRM_SCHEMA: Record<CRMEntity, { scope: "business" | "user"; readable: string[]; writable: string[] }> = {
   customers: {
@@ -1507,6 +1675,11 @@ const CRM_SCHEMA: Record<CRMEntity, { scope: "business" | "user"; readable: stri
     scope: "business",
     readable: ["id", "user_id", "action_kind", "title", "reasoning", "evidence", "payload", "status", "approved_by", "approved_at", "executed_at", "execution_result", "created_at"],
     writable: ["status", "approved_by", "approved_at", "executed_at", "execution_result"],
+  },
+  crm_donor_research_requests: {
+    scope: "business",
+    readable: ["id", "user_id", "customer_id", "donor_record_id", "provider_key", "status", "request_payload", "readiness", "result", "error_message", "created_at", "updated_at"],
+    writable: ["status", "request_payload", "readiness", "result", "error_message", "updated_at"],
   },
 }
 
@@ -1822,6 +1995,266 @@ async function prepareConnectedToolAction(user: UserContext, args: Record<string
   }
 }
 
+async function findCustomer(user: UserContext, args: Record<string, any>) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const query = safeText(args.query || args.name || args.email)
+  if (!query) throw new Error("query is required")
+  const term = query.replace(/[%(),]/g, " ").trim()
+  const { data, error } = await supabase
+    .from("customers")
+    .select("id, name, email, phone, location, relationship_type, notes, updated_at")
+    .eq("business_id", businessId)
+    .or(`name.ilike.%${term}%,email.ilike.%${term}%`)
+    .order("updated_at", { ascending: false })
+    .limit(10)
+  if (error) throw error
+
+  const matches = data || []
+  return {
+    status: matches.length === 0 ? "no_match" : matches.length === 1 ? "matched" : "ambiguous",
+    count: matches.length,
+    customer: matches.length === 1 ? matches[0] : null,
+    matches,
+    message:
+      matches.length === 0
+        ? "No customer matched. Ask for an email address or create a customer first."
+        : matches.length === 1
+          ? "One customer matched."
+          : "Multiple customers matched. Ask the user to choose one before updating or emailing.",
+  }
+}
+
+function defaultSurveyQuestions(topic?: string) {
+  const focus = safeText(topic) || "your experience"
+  return [
+    { id: "q1", type: "rating", label: `How satisfied are you with ${focus}?`, required: true },
+    { id: "q2", type: "text", label: "What is the main thing we should improve first?", required: true },
+    { id: "q3", type: "text", label: "What would make you more likely to recommend us?", required: false },
+  ]
+}
+
+async function createNativeSurvey(user: UserContext, args: Record<string, any>) {
+  const questions = Array.isArray(args.questions) && args.questions.length > 0 ? args.questions : defaultSurveyQuestions(args.topic)
+  const { data, error } = await supabase
+    .from("surveys")
+    .insert({
+      user_id: user.id,
+      title: safeText(args.title) || "Customer feedback pulse",
+      description: safeText(args.description) || "Short survey created by SleekCRM Agent.",
+      questions,
+      is_active: args.isActive === true,
+    })
+    .select("id, title, description, questions, is_active, created_at")
+    .single()
+  if (error) throw error
+  return { ok: true, survey: data, message: "Native survey draft created in Supabase." }
+}
+
+function applyTemplateVariables(template: string, variables: Record<string, any>) {
+  return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, key) => safeText(variables[key]) || "")
+}
+
+async function loadTemplate(user: UserContext, templateId?: string, templateName?: string) {
+  const businessId = user.business?.id
+  if (!businessId || (!templateId && !templateName)) return null
+  let query: any = supabase
+    .from("crm_communication_templates")
+    .select("id, name, subject, body, variables")
+    .eq("business_id", businessId)
+    .eq("channel", "email")
+    .eq("is_active", true)
+  if (templateId) query = query.eq("id", templateId)
+  if (templateName) query = query.ilike("name", templateName)
+  const { data } = await query.limit(1).maybeSingle()
+  return data || null
+}
+
+async function prepareEmailToCustomer(user: UserContext, args: Record<string, any>, request?: NextRequest) {
+  const customerLookup = args.customerId
+    ? await queryCRMRecords(user, { entity: "customers", filters: { id: args.customerId }, limit: 1 })
+    : await findCustomer(user, { query: args.customer || args.query || args.email })
+
+  const customer = Array.isArray((customerLookup as any).records)
+    ? (customerLookup as any).records[0]
+    : (customerLookup as any).customer
+  if (!customer) return { ok: false, needsResolution: true, lookup: customerLookup }
+  if (!safeText(customer.email)) return { ok: false, needsResolution: true, message: "Matched customer has no email address.", customer }
+
+  const template = await loadTemplate(user, safeText(args.templateId), safeText(args.templateName))
+  const variables = {
+    customer_name: safeText(customer.name) || safeText(customer.email),
+    customer_email: safeText(customer.email),
+    business_name: safeText(user.business?.name) || "Your team",
+    topic: safeText(args.topic),
+    ...(args.variables && typeof args.variables === "object" ? args.variables : {}),
+  }
+  const subject = applyTemplateVariables(safeText(args.subject) || safeText(template?.subject) || `Quick note from ${variables.business_name}`, variables)
+  const text = applyTemplateVariables(
+    safeText(args.body) ||
+      safeText(template?.body) ||
+      `Hi ${variables.customer_name},\n\nI wanted to follow up about ${variables.topic || "your experience"}.\n\nThanks,\n${variables.business_name}`,
+    variables,
+  )
+  const readiness = request ? await getEmailProviderReadiness(request) : null
+  const proposal: CRMActionProposal = {
+    id: `proposal-${hashObject(["email-customer", customer.id, subject, text]).slice(0, 10)}`,
+    kind: "send_email",
+    title: `Email ${safeText(customer.name) || safeText(customer.email)}`,
+    status: "proposed",
+    reasoning: "Prepared through the typed customer email workflow. It must be approved before sending.",
+    evidence: [makeEvidence("customer", `${safeText(customer.name)} <${safeText(customer.email)}>`, "customer", customer.id)],
+    payload: {
+      to: [{ name: safeText(customer.name), email: safeText(customer.email) }],
+      subject,
+      text,
+      customerId: customer.id,
+      templateId: template?.id || null,
+    },
+    draft: text,
+    createdAt: new Date().toISOString(),
+  }
+  const [persisted] = await persistActionProposals(user, [proposal])
+  return { ok: true, approvalRequired: true, readiness, proposal: persisted }
+}
+
+async function sendApprovedEmail(user: UserContext, args: Record<string, any>, request?: NextRequest) {
+  if (!request) throw new Error("request is required")
+  const actionId = safeText(args.approvalId || args.actionId)
+  if (!actionId) throw new Error("approvalId is required")
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const { data, error } = await supabase
+    .from("crm_ai_action_approvals")
+    .select("id, action_kind, title, reasoning, evidence, payload, status, created_at")
+    .eq("business_id", businessId)
+    .eq("user_id", user.id)
+    .eq("id", actionId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error("Approval not found")
+  if (data.action_kind !== "send_email") throw new Error("Approval is not an email action")
+  if (!["pending", "approved"].includes(data.status)) throw new Error("Approval is not sendable")
+  return executeCRMAction(user, {
+    id: data.id,
+    kind: "send_email",
+    title: data.title,
+    status: proposalStatusFromApproval(data.status),
+    reasoning: data.reasoning,
+    evidence: data.evidence || [],
+    payload: data.payload || {},
+    draft: data.payload?.draft || data.payload?.text || "",
+    createdAt: data.created_at,
+  }, request)
+}
+
+async function updateCustomerProfile(user: UserContext, args: Record<string, any>) {
+  const customerId = safeText(args.customerId)
+  if (!customerId) throw new Error("customerId is required")
+  const allowed = ["name", "email", "phone", "location", "age", "notes", "relationship_type", "data"]
+  const updates = Object.fromEntries(Object.entries(args.updates || {}).filter(([key]) => allowed.includes(key)))
+  return updateCRMRecords(user, { entity: "customers", ids: [customerId], updates })
+}
+
+async function donorSearchReadiness(user: UserContext) {
+  const integrations = await getIntegrationSummary(user)
+  const donorSearch = integrations.find((integration) => integration.key === "donorsearch")
+  const ready = donorSearch?.config?.status === "configured" || donorSearch?.config?.status === "enabled"
+  return {
+    ready,
+    providerKey: "donorsearch",
+    status: donorSearch?.config?.status || "not_configured",
+    message: ready
+      ? "DonorSearch is marked configured. Live enrichment still requires server-side API credentials and private API docs."
+      : "DonorSearch is not configured. The agent can prepare a research request, but it will not perform live enrichment.",
+  }
+}
+
+async function createDonorResearchRequest(user: UserContext, payload: Record<string, any>, reasoning = "", evidence: EvidenceItem[] = []) {
+  const businessId = user.business?.id
+  if (!businessId) throw new Error("Business scope missing")
+  const readiness = await donorSearchReadiness(user)
+  const { data, error } = await supabase
+    .from("crm_donor_research_requests")
+    .insert({
+      business_id: businessId,
+      user_id: user.id,
+      customer_id: safeText(payload.customerId) || null,
+      donor_record_id: safeText(payload.donorRecordId) || null,
+      provider_key: "donorsearch",
+      status: "review_requested",
+      request_payload: { ...payload, reasoning, evidence },
+      readiness,
+    })
+    .select("id, status, provider_key, readiness, created_at")
+    .single()
+  if (error) throw error
+  return { request: data, readiness }
+}
+
+async function prepareDonorResearch(user: UserContext, args: Record<string, any>) {
+  const lookup = args.customerId ? null : await findCustomer(user, { query: args.customer || args.query || args.email })
+  const customer = args.customerId ? { id: safeText(args.customerId), name: safeText(args.customer || args.name) } : (lookup as any)?.customer
+  if (!customer && lookup && (lookup as any).status !== "no_match") return { ok: false, needsResolution: true, lookup }
+  const readiness = await donorSearchReadiness(user)
+  const proposal: CRMActionProposal = {
+    id: `proposal-${hashObject(["donor-research", customer?.id || args.query || args.email, args.reason]).slice(0, 10)}`,
+    kind: "prepare_donor_research",
+    title: `Prepare donor research${customer?.name ? ` for ${customer.name}` : ""}`,
+    status: "proposed",
+    reasoning: safeText(args.reasoning) || "Create a review queue item for donor research. No live enrichment runs without private API docs and credentials.",
+    evidence: customer?.id ? [makeEvidence("customer", safeText(customer.name) || customer.id, "customer", customer.id)] : [],
+    payload: {
+      customerId: customer?.id || null,
+      donorRecordId: safeText(args.donorRecordId) || null,
+      researchGoal: safeText(args.researchGoal || args.reason) || "Assess donor research and connection opportunities.",
+      readiness,
+    },
+    createdAt: new Date().toISOString(),
+  }
+  const [persisted] = await persistActionProposals(user, [proposal])
+  return { ok: true, approvalRequired: true, readiness, proposal: persisted }
+}
+
+function extractNamedTarget(prompt: string, verbs: string[]) {
+  const escaped = verbs.map((verb) => verb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  const match = prompt.match(new RegExp(`\\b(?:${escaped})\\b\\s+(?:to\\s+|for\\s+)?([A-Za-z0-9@._' -]{2,80})`, "i"))
+  return safeText(match?.[1]).replace(/\b(about|regarding|with|and|please)\b.*$/i, "").trim()
+}
+
+async function proposeDirectWorkflowActions(user: UserContext, prompt: string, request?: NextRequest): Promise<CRMActionProposal[]> {
+  const text = prompt.toLowerCase()
+  const proposals: CRMActionProposal[] = []
+
+  if (/\b(email|send email|draft email|write email)\b/i.test(text)) {
+    const target = extractNamedTarget(prompt, ["email", "send email", "draft email", "write email"])
+    if (target) {
+      const prepared = await prepareEmailToCustomer(
+        user,
+        {
+          customer: target,
+          topic: safeText(prompt),
+          subject: `Quick follow-up from ${safeText(user.business?.name) || "your team"}`,
+        },
+        request,
+      )
+      if ((prepared as any).proposal) proposals.push((prepared as any).proposal)
+    }
+  }
+
+  if (/\b(donor research|research donor|research this donor|donorsearch|wealth screen|wealth screening)\b/i.test(text)) {
+    const target = extractNamedTarget(prompt, ["research", "donor research", "research donor"]) || safeText(prompt)
+    const prepared = await prepareDonorResearch(user, {
+      customer: target,
+      researchGoal: prompt,
+      reasoning: "The prompt asks for donor research. This creates a reviewable request without live enrichment.",
+    })
+    if ((prepared as any).proposal) proposals.push((prepared as any).proposal)
+  }
+
+  return proposals
+}
+
 export const CRM_MCP_TOOLS = [
   {
     name: "crm.describe_schema",
@@ -1833,7 +2266,7 @@ export const CRM_MCP_TOOLS = [
   },
   {
     name: "crm.list_connected_tools",
-    description: "List connected tools the agent can use or prepare actions for, including setup state and safe capabilities.",
+    description: "Connected tools include Gmail and in-platform config tools. Future tools such as accounting, SMS, calendar, survey, donor research, etc. will be listed here.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1853,6 +2286,96 @@ export const CRM_MCP_TOOLS = [
         evidence: { type: "array", items: { type: "object" } },
       },
       required: ["providerKey", "action"],
+    },
+  },
+  {
+    name: "crm.find_customer",
+    description: "Resolve a customer by name or email with no-match and ambiguity handling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        name: { type: "string" },
+        email: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "crm.create_native_survey",
+    description: "Create a native SleekCRM survey record through Supabase. Use surveys as the primary feedback workflow.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        description: { type: "string" },
+        topic: { type: "string" },
+        questions: { type: "array", items: { type: "object" } },
+        isActive: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "crm.prepare_email_to_customer",
+    description: "Resolve a customer, optionally apply an email template, and persist an approval-gated email proposal. Does not send.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer: { type: "string" },
+        customerId: { type: "string" },
+        email: { type: "string" },
+        subject: { type: "string" },
+        body: { type: "string" },
+        topic: { type: "string" },
+        templateId: { type: "string" },
+        templateName: { type: "string" },
+        variables: { type: "object" },
+      },
+    },
+  },
+  {
+    name: "crm.send_approved_email",
+    description: "Send an email only from an existing approval row after explicit approval and provider readiness checks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approvalId: { type: "string" },
+      },
+      required: ["approvalId"],
+    },
+  },
+  {
+    name: "crm.update_customer_profile",
+    description: "Update scoped customer profile fields. Use after explicit user request or approval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customerId: { type: "string" },
+        updates: { type: "object" },
+      },
+      required: ["customerId", "updates"],
+    },
+  },
+  {
+    name: "crm.prepare_donor_research",
+    description: "Prepare a DonorSearch-ready donor research request and approval row. No live enrichment runs without credentials/docs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer: { type: "string" },
+        customerId: { type: "string" },
+        email: { type: "string" },
+        donorRecordId: { type: "string" },
+        researchGoal: { type: "string" },
+        reasoning: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "crm.email_provider_readiness",
+    description: "Check whether the shared server email provider is configured for send/fetch.",
+    inputSchema: {
+      type: "object",
+      properties: {},
     },
   },
   {
@@ -1981,6 +2504,34 @@ export async function callCRMTool(user: UserContext, name: string, args: Record<
 
   if (name === "crm.prepare_connected_tool_action") {
     return { content: [{ type: "text", text: JSON.stringify(await prepareConnectedToolAction(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.find_customer") {
+    return { content: [{ type: "text", text: JSON.stringify(await findCustomer(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.create_native_survey") {
+    return { content: [{ type: "text", text: JSON.stringify(await createNativeSurvey(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.prepare_email_to_customer") {
+    return { content: [{ type: "text", text: JSON.stringify(await prepareEmailToCustomer(user, args, request), null, 2) }] }
+  }
+
+  if (name === "crm.send_approved_email" && request) {
+    return { content: [{ type: "text", text: JSON.stringify(await sendApprovedEmail(user, args, request), null, 2) }] }
+  }
+
+  if (name === "crm.update_customer_profile") {
+    return { content: [{ type: "text", text: JSON.stringify(await updateCustomerProfile(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.prepare_donor_research") {
+    return { content: [{ type: "text", text: JSON.stringify(await prepareDonorResearch(user, args), null, 2) }] }
+  }
+
+  if (name === "crm.email_provider_readiness" && request) {
+    return { content: [{ type: "text", text: JSON.stringify(await getEmailProviderReadiness(request), null, 2) }] }
   }
 
   if (name === "crm.update_records") {

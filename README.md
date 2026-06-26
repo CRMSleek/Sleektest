@@ -8,7 +8,7 @@ A modern CRM platform built with Next.js, React, TypeScript, Supabase, and Postg
 - **Survey Builder**: Create customizable surveys with various question types
 - **Customer Management**: Automatically generate customer profiles from survey responses
 - **Analytics Dashboard**: Real-time analytics with charts and metrics
-- **AI Insights**: Generate intelligent insights from customer data using OpenAI
+- **Interactive CRM Agent**: Ask CRM questions, choose next steps with buttons, and approve actions before execution
 - **Responsive Design**: Works seamlessly on desktop and mobile devices
 - **Public Survey Links**: Share surveys with customers via unique URLs
 - **Configurable CRM Objects**: Custom object types, custom fields, dynamic records, and record relationships
@@ -26,7 +26,7 @@ A modern CRM platform built with Next.js, React, TypeScript, Supabase, and Postg
 - **Backend**: Next.js API Routes with Supabase server client
 - **Database**: Supabase PostgreSQL
 - **Authentication**: JWT with HTTP-only cookies
-- **AI**: OpenAI GPT-4 for insights generation
+- **AI**: OpenRouter-compatible chat completions for the approval-gated CRM agent
 - **UI Components**: shadcn/ui, Radix UI
 - **Charts**: Recharts
 - **Validation**: Zod
@@ -37,7 +37,7 @@ A modern CRM platform built with Next.js, React, TypeScript, Supabase, and Postg
 
 - Node.js 18+ 
 - PostgreSQL database
-- OpenAI API key (optional, for AI insights)
+- OpenRouter API key (optional, for the CRM agent)
 
 ### Installation
 
@@ -130,7 +130,7 @@ After seeding, you can log in with:
 
 ### Analytics
 - `GET /api/analytics` - Get analytics data
-- `POST /api/analytics/insights` - Generate AI insights
+- `GET|POST /api/analytics/assistant` - CRM agent chat, guided choices, approvals, and workspace context
 
 ### Configurable CRM Platform
 - `GET /api/crm/platform` - Platform summary, metrics, object model, integrations, compliance-readiness note
@@ -185,8 +185,6 @@ For Vercel, set these in Project Settings -> Environment Variables for Productio
 | `GOOGLE_CLIENT_SECRET` | Optional Google OAuth secret, server-side only | No |
 | `OPENROUTER_KEY` | OpenRouter key for the CRM agent console | No |
 | `OPENROUTER_MODEL` | OpenRouter model name for CRM agent console | No |
-| `OPENAI_API_KEY` | OpenAI API key for insights | No |
-| `HF_API_TOKEN` | Hugging Face token for optional analytics digest | No |
 | `EMAIL_ADDRESS` | Optional contact form sender account | No |
 | `APP_PASSWORD` | Optional contact form sender app password | No |
 | `DEFAULT_IMAP_HOST` | Optional default inbox host override | No |

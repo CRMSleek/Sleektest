@@ -2,7 +2,7 @@ import { ImapFlow } from "imapflow"
 import { simpleParser } from "mailparser"
 import { nanoid } from "nanoid"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
-import { getEffectiveEmailCredentials } from "@/lib/email-settings"
+import { createInboxClient } from "@/lib/server-email-provider"
 import type { NextRequest } from "next/server"
 
 type UserContext = {
@@ -79,22 +79,6 @@ function safeText(value: unknown) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
 }
 
-function getImapConfigFromDomain(email: string, password: string) {
-  const domain = email.split("@")[1]?.toLowerCase() || ""
-  const base = { auth: { user: email, pass: password } }
-  if (domain === "gmail.com") return { host: "imap.gmail.com", port: 993, secure: true, ...base }
-  if (["outlook.com", "hotmail.com", "live.com"].includes(domain) || domain.endsWith("office365.com")) {
-    return { host: "outlook.office365.com", port: 993, secure: true, ...base }
-  }
-  if (["yahoo.com", "ymail.com"].includes(domain)) return { host: "imap.mail.yahoo.com", port: 993, secure: true, ...base }
-  return {
-    host: process.env.DEFAULT_IMAP_HOST || `imap.${domain}`,
-    port: Number(process.env.DEFAULT_IMAP_PORT || 993),
-    secure: true,
-    ...base,
-  }
-}
-
 export function classifyEmailForAnalysis(email: InboxEmailForAnalysis) {
   const from = `${safeText(email.fromEmail)} ${safeText(email.from)} ${safeText(email.fromName)}`.toLowerCase()
   const text = `${safeText(email.subject)} ${safeText(email.contentText)} ${safeText(email.content)}`.toLowerCase()
@@ -168,29 +152,86 @@ export async function saveEmailsForAnalysis(user: UserContext, emails: InboxEmai
   }
 
   result.saved = (inserted || []).map((email: any) => email.gmail_message_id)
+  await autoCreateCustomersFromEmails(user, toInsert)
   return result
+}
+
+async function autoCreateCustomersFromEmails(user: UserContext, emails: ReturnType<typeof normalizeEmailForSave>[]) {
+  const businessId = user.business?.id
+  if (!businessId || emails.length === 0) return
+
+  for (const email of emails) {
+    const senderEmail = safeText(email.sender_email).toLowerCase()
+    if (!senderEmail || /(no-?reply|newsletter|notification|mailer|calendar)/i.test(senderEmail)) continue
+
+    const senderName = safeText(email.sender_name) || senderEmail
+    const { data: existing } = await supabase
+      .from("customers")
+      .select("id, name, data")
+      .eq("business_id", businessId)
+      .eq("email", senderEmail)
+      .maybeSingle()
+
+    let customerId = existing?.id as string | undefined
+    if (customerId && existing) {
+      const data = existing.data && typeof existing.data === "object" ? existing.data : {}
+      await supabase
+        .from("customers")
+        .update({
+          name: safeText(existing.name) || senderName,
+          data: { ...data, last_saved_email_subject: email.subject, last_saved_email_at: email.date },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("business_id", businessId)
+        .eq("id", customerId)
+    } else {
+      const { data: created } = await supabase
+        .from("customers")
+        .insert({
+          business_id: businessId,
+          name: senderName,
+          email: senderEmail,
+          relationship_type: "customer",
+          data: {
+            source: "saved_email",
+            first_saved_email_subject: email.subject,
+            first_saved_email_at: email.date,
+          },
+        })
+        .select("id")
+        .single()
+      customerId = created?.id
+    }
+
+    if (!customerId) continue
+    const { data: existingMapping } = await supabase
+      .from("email_relationship_mappings")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("email_id", email.gmail_message_id)
+      .maybeSingle()
+
+    if (!existingMapping) {
+      await supabase.from("email_relationship_mappings").insert({
+        id: nanoid(),
+        user_id: user.id,
+        email_id: email.gmail_message_id,
+        relationship_id: customerId,
+      })
+    }
+  }
 }
 
 export async function fetchRelevantInboxEmailsForAnalysis(request: NextRequest, maxResults = 50) {
   let client: ImapFlow | null = null
   let lock: Awaited<ReturnType<ImapFlow["getMailboxLock"]>> | null = null
-  const credentials = await getEffectiveEmailCredentials(request)
-  if (!credentials) {
+  const { client: inboxClient, error } = await createInboxClient(request)
+  if (!inboxClient) {
     return { emails: [] as InboxEmailForAnalysis[], classified: [] as Array<InboxEmailForAnalysis & { score: number; reason: string }>, error: "Email not configured" }
   }
 
   try {
-    const imapConfig =
-      credentials.imap?.host && credentials.imap?.port
-        ? {
-            host: credentials.imap.host,
-            port: credentials.imap.port,
-            secure: credentials.imap.secure ?? true,
-            auth: { user: credentials.email, pass: credentials.password },
-          }
-        : getImapConfigFromDomain(credentials.email, credentials.password)
-
-    client = new ImapFlow(imapConfig)
+    client = inboxClient
     await client.connect()
     lock = await client.getMailboxLock("INBOX")
 

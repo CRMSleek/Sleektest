@@ -13,8 +13,6 @@ import {
   FileText,
   History,
   Mail,
-  PanelLeftClose,
-  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
@@ -33,6 +31,8 @@ import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
+import { InteractivePromptBlock } from "@/components/dashboard/agent-interactive-prompt"
+import { parseInteractiveFromAssistant } from "@/lib/agent-interactive-prompts"
 import {
   Dialog,
   DialogContent,
@@ -76,7 +76,7 @@ type EvidenceItem = {
 
 type AgentProposal = {
   id: string
-  kind: "send_email" | "create_task" | "update_customer" | "create_report" | "create_survey"
+  kind: "send_email" | "create_task" | "update_customer" | "create_report" | "create_survey" | "prepare_donor_research"
   title: string
   status: "proposed" | "approved" | "rejected" | "completed"
   reasoning: string
@@ -117,16 +117,11 @@ type AssistantResponse = {
   error?: string
 }
 
-type InlineAction = {
-  title: string
-  options: Array<{ label: string; value: string }>
-}
-
 const WELCOME: AgentMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "Ask a CRM question. I will inspect customer, survey, and email data, then propose actions for approval.",
+    "Ask a CRM question or pick a starter below. I'll inspect your data and offer next steps as buttons when a choice is needed.",
 }
 
 function formatTime(value?: string | null) {
@@ -274,21 +269,12 @@ function mergeProposalLists(existing: AgentProposal[], incoming: AgentProposal[]
   return Array.from(byId.values())
 }
 
-function parseAssistantMessage(content: string): { text: string; inlineAction: InlineAction | null } {
-  const blockRegex = /```json\s+([\s\S]*?)\s+```/g
-  let text = content
-  let inlineAction: InlineAction | null = null
-  let match: RegExpExecArray | null
-
-  while ((match = blockRegex.exec(content))) {
-    const parsed = parseJsonOrNull(match[1])
-    if (parsed?.proposedAction?.title && Array.isArray(parsed.proposedAction.options)) {
-      inlineAction = parsed.proposedAction
-      text = text.replace(match[0], "").trim()
-    }
+function parseAssistantMessage(content: string) {
+  const parsed = parseInteractiveFromAssistant(content)
+  return {
+    text: parsed.text || (parsed.interactive ? "" : content.trim()),
+    interactive: parsed.interactive,
   }
-
-  return { text: text || (content.trim() ? "Review the proposed action." : ""), inlineAction }
 }
 
 function parseStreamBlock(block: string) {
@@ -463,127 +449,6 @@ function SkillsDialog({
   )
 }
 
-function ProposedActionsPanel({
-  proposals,
-  sending,
-  onEdit,
-  onReject,
-  onApprove,
-  onCollapse,
-}: {
-  proposals: AgentProposal[]
-  sending: boolean
-  onEdit: (proposal: AgentProposal) => void
-  onReject: (proposalId: string) => void
-  onApprove: (proposal: AgentProposal) => void
-  onCollapse: () => void
-}) {
-  return (
-    <aside className="hidden w-[clamp(340px,30vw,420px)] shrink-0 flex-col overflow-hidden border-r bg-card lg:flex">
-      <div className="shrink-0 border-b px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate font-semibold">Proposed actions</p>
-            <p className="mt-1 text-sm text-muted-foreground">Review, edit, approve, or reject.</p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <Badge variant="secondary">{proposals.length}</Badge>
-            <Button size="icon" variant="ghost" onClick={onCollapse} aria-label="Collapse proposed actions">
-              <PanelLeftClose className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
-        <div className="w-full min-w-0 space-y-3 p-3">
-          {proposals.length ? (
-            proposals.map((proposal) => {
-              const Icon = proposalIcon(proposal.kind)
-
-              return (
-                <div
-                  key={proposal.id}
-                  className="w-full min-w-0 overflow-hidden rounded-lg border bg-background p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
-                >
-                  <div className="flex min-w-0 items-start gap-3">
-                    <div className="shrink-0 rounded-md bg-primary/10 p-2 text-primary">
-                      <Icon className="h-4 w-4" />
-                    </div>
-
-                    <div className="min-w-0 flex-1 overflow-hidden">
-                      <div className="flex min-w-0 items-start justify-between gap-2">
-                        <p className="min-w-0 flex-1 break-words text-sm font-semibold leading-5">
-                          {proposal.title}
-                        </p>
-
-                        <Badge
-                          variant={proposal.status === "rejected" ? "destructive" : "outline"}
-                          className="shrink-0"
-                        >
-                          {proposal.status}
-                        </Badge>
-                      </div>
-
-                      <p className="mt-2 min-w-0 break-words text-sm leading-5 text-muted-foreground">
-                        {proposal.reasoning}
-                      </p>
-                    </div>
-                  </div>
-
-                  {proposal.draft ? (
-                    <div className="mt-3 max-h-32 w-full min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                      {proposal.draft}
-                    </div>
-                  ) : null}
-
-                  {proposal.evidence?.length ? (
-                    <div className="mt-3 w-full min-w-0 space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground">Evidence</p>
-
-                      {proposal.evidence.slice(0, 3).map((item, index) => (
-                        <p
-                          key={`${proposal.id}-e-${index}`}
-                          className="min-w-0 break-words border-l pl-2 text-xs leading-5 text-muted-foreground"
-                        >
-                          {item.label}: {item.detail}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="mt-4 grid w-full min-w-0 grid-cols-[40px_40px_minmax(0,1fr)] gap-2">
-                    <Button size="icon" variant="outline" onClick={() => onEdit(proposal)} aria-label="Edit action">
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-
-                    <Button size="icon" variant="outline" onClick={() => onReject(proposal.id)} aria-label="Reject action">
-                      <XCircle className="h-4 w-4 text-destructive" />
-                    </Button>
-
-                    <Button
-                      className="min-w-0"
-                      disabled={sending || proposal.status === "completed" || proposal.status === "rejected"}
-                      onClick={() => onApprove(proposal)}
-                    >
-                      Approve
-                    </Button>
-                  </div>
-                </div>
-              )
-            })
-          ) : (
-            <div className="w-full min-w-0 rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-              Ask the agent for a recommendation to generate proposed actions.
-            </div>
-          )}
-        </div>
-      </div>
-    </aside>
-  )
-}
-
 function HistoryPanel({
   chats,
   activeChatId,
@@ -602,15 +467,20 @@ function HistoryPanel({
   onCollapse: () => void
 }) {
   return (
-    <aside className="hidden w-[clamp(300px,24vw,360px)] shrink-0 flex-col overflow-hidden border-l bg-card lg:flex">
-      <div className="border-b px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <p className="truncate font-semibold">History</p>
+    <aside className="hidden w-[min(360px,32vw)] max-w-[360px] shrink-0 flex-col overflow-hidden border-l bg-card/95 lg:flex">
+      <div className="shrink-0 border-b px-4 py-4">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="min-w-0 truncate text-sm font-semibold">History</p>
+            <p className="mt-1 text-xs text-muted-foreground">{chats.length} saved sessions</p>
+          </div>
+
           <div className="flex shrink-0 items-center gap-2">
             <Button size="sm" variant="outline" onClick={onNewChat} disabled={sending}>
               <Plus className="mr-2 h-4 w-4" />
               New
             </Button>
+
             <Button size="icon" variant="ghost" onClick={onCollapse} aria-label="Collapse history">
               <PanelRightClose className="h-4 w-4" />
             </Button>
@@ -618,45 +488,203 @@ function HistoryPanel({
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-2 p-3">
+        <div className="w-[calc(100%-1px)] max-w-[calc(100%-1px)] space-y-2 p-3">
           {chats.map((chat) => (
-            <button
+            <div
               key={chat.id}
-              type="button"
-              onClick={() => onOpenChat(chat.id)}
-              className={`group flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-all duration-200 hover:-translate-y-0.5 ${
-                chat.id === activeChatId ? "border-primary bg-primary/5 shadow-sm" : "bg-background hover:border-primary/30 hover:bg-muted/50"
+              className={`group grid w-full grid-cols-[1fr_auto] gap-2 overflow-hidden rounded-lg border bg-background p-3 text-left transition-all ${
+                chat.id === activeChatId
+                  ? "border-primary bg-primary/5 shadow-[inset_4px_0_0_hsl(var(--primary))]"
+                  : "hover:-translate-x-0.5 hover:border-primary/30 hover:bg-muted/50"
               }`}
             >
-              <History className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{chat.title || "CRM agent session"}</span>
-                <span className="block text-xs text-muted-foreground">{formatTime(chat.updated_at)}</span>
-              </span>
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onDeleteChat(chat.id)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    onDeleteChat(chat.id)
-                  }
-                }}
-                className="rounded-md p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+              <button
+                type="button"
+                onClick={() => onOpenChat(chat.id)}
+                className="grid min-w-0 grid-cols-[auto_1fr] gap-3 text-left"
+              >
+                <History className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+
+                <span className="min-w-0 overflow-hidden">
+                  <span className="block truncate text-sm font-medium">
+                    {chat.title || "CRM agent session"}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {formatTime(chat.updated_at)}
+                  </span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onDeleteChat(chat.id)}
+                className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                 aria-label="Delete chat"
               >
                 <Trash2 className="h-4 w-4" />
-              </span>
-            </button>
+              </button>
+            </div>
           ))}
-          {chats.length === 0 ? <p className="rounded-lg border bg-background p-3 text-sm text-muted-foreground">No previous chats.</p> : null}
+          {chats.length === 0 ? (
+            <div className="rounded-lg border border-dashed bg-background/70 p-4 text-sm text-muted-foreground">
+              No saved sessions yet.
+            </div>
+          ) : null}
         </div>
       </ScrollArea>
+    </aside>
+  )
+}
+
+function InlineProposals({
+  proposals,
+  sending,
+  onEdit,
+  onReject,
+  onApprove,
+}: {
+  proposals: AgentProposal[]
+  sending: boolean
+  onEdit: (proposal: AgentProposal) => void
+  onReject: (proposalId: string) => void
+  onApprove: (proposal: AgentProposal) => void
+}) {
+  if (proposals.length === 0) return null
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-card p-3">
+      <div className="flex items-center justify-between border-b pb-3">
+        <div>
+          <p className="text-sm font-semibold">Actions waiting for approval</p>
+          <p className="mt-1 text-xs text-muted-foreground">Review proposed CRM changes before they run.</p>
+        </div>
+        <Badge variant="secondary" className="agent-number">{proposals.length}</Badge>
+      </div>
+      {proposals.map((proposal) => {
+        const Icon = proposalIcon(proposal.kind)
+        return (
+          <div key={proposal.id} className="overflow-hidden rounded-lg border bg-background p-4 text-sm shadow-sm shadow-primary/5">
+            <div className="flex min-w-0 gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-primary text-primary-foreground">
+                <Icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <p className="min-w-0 break-words font-semibold">{proposal.title}</p>
+                  <Badge variant={proposal.status === "rejected" ? "destructive" : "outline"} className="shrink-0">
+                    {proposal.status}
+                  </Badge>
+                </div>
+                <p className="mt-2 break-words text-muted-foreground">{proposal.reasoning}</p>
+                {proposal.draft ? (
+                  <div className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-xs text-muted-foreground">
+                    {proposal.draft}
+                  </div>
+                ) : null}
+                {proposal.evidence?.length ? (
+                  <div className="mt-3 space-y-1">
+                    {proposal.evidence.slice(0, 2).map((item, index) => (
+                      <p key={`${proposal.id}-inline-e-${index}`} className="break-words border-l pl-2 text-xs text-muted-foreground">
+                        {item.label}: {item.detail}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => onEdit(proposal)}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => onReject(proposal.id)}>
+                    <XCircle className="mr-2 h-4 w-4 text-destructive" />
+                    Reject
+                  </Button>
+                  <Button size="sm" disabled={sending || proposal.status === "completed" || proposal.status === "rejected"} onClick={() => onApprove(proposal)}>
+                    Approve
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function AgentContextRail({
+  snapshot,
+  proposals,
+  enabledSkillCount,
+  suggestedPrompts,
+  sending,
+  onPrompt,
+}: {
+  snapshot?: AgentContext["snapshot"]
+  proposals: AgentProposal[]
+  enabledSkillCount: number
+  suggestedPrompts: string[]
+  sending: boolean
+  onPrompt: (prompt: string) => void
+}) {
+  const metrics = [
+    { label: "Relationships", value: snapshot?.customerCount },
+    { label: "Surveys", value: snapshot?.surveyCount },
+    { label: "Responses", value: snapshot?.responseCount },
+    { label: "Emails", value: snapshot?.emailCount },
+  ]
+
+  return (
+    <aside className="border-b bg-card/90 xl:w-[280px] xl:shrink-0 xl:border-b-0 xl:border-r">
+      <div className=" border-b px-4 py-5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Bot className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">Agent workspace</p>
+            <p className="mt-1 text-xs text-muted-foreground">{snapshot?.latestActivityAt ? `Updated ${formatTime(snapshot.latestActivityAt)}` : "CRM context loading"}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 border-b xl:grid-cols-1">
+        {metrics.map((metric, index) => (
+          <div key={metric.label} className={`p-4 ${index % 2 === 0 ? "border-r xl:border-r-0" : ""} ${index < 2 ? "border-b xl:border-b" : "xl:border-b"}`}>
+            <p className="text-xs text-muted-foreground">{metric.label}</p>
+            <p className="agent-number mt-2 text-3xl font-semibold tracking-tight">{metric.value ?? "-"}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-1">
+        <div className="rounded-lg border bg-background p-3">
+          <p className="text-xs font-medium text-muted-foreground">Pending approvals</p>
+          <p className="agent-number mt-2 text-2xl font-semibold">{proposals.length}</p>
+        </div>
+        <div className="rounded-lg border bg-background p-3">
+          <p className="text-xs font-medium text-muted-foreground">Enabled skills</p>
+          <p className="agent-number mt-2 text-2xl font-semibold">{enabledSkillCount}</p>
+        </div>
+      </div>
+
+      <div className="border-t p-4">
+        <p className="text-xs font-semibold text-muted-foreground">Starter prompts</p>
+        <div className="mt-3 grid gap-2">
+          {suggestedPrompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              disabled={sending}
+              onClick={() => onPrompt(prompt)}
+              className="group flex min-h-11 items-center justify-between gap-3 rounded-lg border bg-background px-3 py-2 text-left text-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/5 disabled:pointer-events-none disabled:opacity-50"
+            >
+              <span>{prompt}</span>
+              <Send className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+            </button>
+          ))}
+        </div>
+      </div>
     </aside>
   )
 }
@@ -676,12 +704,12 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   const [editing, setEditing] = useState<AgentProposal | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
-  const [actionsOpen, setActionsOpen] = useState(true)
   const [historyOpen, setHistoryOpen] = useState(true)
   const [composerFocused, setComposerFocused] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [importFileName, setImportFileName] = useState("")
   const [pendingAttachments, setPendingAttachments] = useState<UploadedAttachment[]>([])
+  const [answeredInteractions, setAnsweredInteractions] = useState<Record<string, string>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -690,12 +718,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
   const snapshot = context?.snapshot
 
   const updateCurrentChatProposals = (updater: (current: AgentProposal[]) => AgentProposal[]) => {
-    setProposals((current) => {
-      const state = readStoredProposalState(activeChatId)
-      const next = updater(current)
-      writeStoredProposalState(activeChatId, { proposals: next, resolvedIds: state.resolvedIds })
-      return next
-    })
+    setProposals((current) => updater(current))
   }
 
   const rememberResolvedProposal = (proposalId: string) => {
@@ -703,7 +726,6 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const state = readStoredProposalState(activeChatId)
       state.resolvedIds.add(proposalId)
       const next = current.filter((proposal) => proposal.id !== proposalId)
-      writeStoredProposalState(activeChatId, { proposals: next, resolvedIds: state.resolvedIds })
       return next
     })
   }
@@ -729,12 +751,9 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     const responseChatId = json.activeChatId !== undefined ? json.activeChatId : activeChatId
     if (nextContext) setContext(nextContext)
     if (proposalMode === "merge" && nextProposals) {
-      const state = readStoredProposalState(responseChatId)
-      const merged = mergeProposalLists(state.proposals, nextProposals, state.resolvedIds)
-      writeStoredProposalState(responseChatId, { proposals: merged, resolvedIds: state.resolvedIds })
-      setProposals(merged)
+      setProposals(visibleProposals(nextProposals, new Set()))
     } else if (proposalMode === "load" && responseChatId !== undefined) {
-      setProposals(readStoredProposalState(responseChatId).proposals)
+      setProposals(visibleProposals(nextProposals || [], new Set()))
     }
     if (json.chats) setChats(json.chats)
     if (json.activeChatId !== undefined) setActiveChatId(json.activeChatId || null)
@@ -860,10 +879,11 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       setStatus("")
     } catch (error) {
       console.error("CRM agent send failed:", error)
+      const message = error instanceof Error ? error.message : "Agent failed"
       setPendingAttachments((current) => (current.length ? current : attachments))
       setMessages((current) => [
         ...current.filter((message) => message.id !== streamingId),
-        { id: crypto.randomUUID(), role: "assistant", content: "CRM agent failed to respond. Check model/API configuration.", created_at: new Date().toISOString() },
+        { id: crypto.randomUUID(), role: "assistant", content: `Agent error: ${message}`, created_at: new Date().toISOString() },
       ])
       setStatus("Agent response failed")
     } finally {
@@ -884,23 +904,52 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
       const json = (await response.json()) as AssistantResponse
       if (!response.ok) throw new Error(json.error || "Action failed")
       rememberResolvedProposal(proposal.id)
-      applyResponse(json, "ignore")
+      applyResponse(json, "load")
       setStatus("")
     } catch (error) {
       console.error("Action execution failed:", error)
+      const message = error instanceof Error ? error.message : "Action failed"
       updateCurrentChatProposals((current) => current.map((item) => (item.id === proposal.id ? { ...item, status: "proposed" } : item)))
+      setMessages((current) => [
+        ...current.filter((message) => message.id !== "welcome"),
+        { id: crypto.randomUUID(), role: "assistant", content: `Action error: ${proposal.title}. ${message}`, created_at: new Date().toISOString() },
+      ])
       setStatus("Approved action failed")
     } finally {
       setSending(false)
     }
   }
 
-  const rejectProposal = (proposalId: string) => {
+  const rejectProposal = async (proposalId: string) => {
+    const proposal = proposals.find((item) => item.id === proposalId)
+    if (!proposal) return
     rememberResolvedProposal(proposalId)
+    try {
+      const response = await fetch("/api/analytics/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "reject_action", chatId: activeChatId, action: proposal }),
+      })
+      const json = (await response.json()) as AssistantResponse
+      if (response.ok) applyResponse(json, "load")
+    } catch (error) {
+      console.error("Reject action failed:", error)
+    }
   }
 
-  const saveEditedProposal = (proposal: AgentProposal) => {
+  const saveEditedProposal = async (proposal: AgentProposal) => {
     updateCurrentChatProposals((current) => current.map((item) => (item.id === proposal.id ? proposal : item)))
+    try {
+      const response = await fetch("/api/analytics/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "save_action", chatId: activeChatId, action: proposal }),
+      })
+      const json = (await response.json()) as AssistantResponse
+      if (response.ok) applyResponse(json, "load")
+    } catch (error) {
+      console.error("Save action failed:", error)
+    }
   }
 
   const deleteChat = async (chatId: string) => {
@@ -998,9 +1047,14 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
     textareaRef.current?.focus()
   }
 
+  const selectInteractiveReply = (messageId: string, label: string, value: string) => {
+    setAnsweredInteractions((current) => ({ ...current, [messageId]: label }))
+    void sendChat(value)
+  }
+
   return (
-    <div className="flex h-[100dvh] min-h-0 bg-background text-foreground">
-      <ProposalEditor proposal={editing} open={editorOpen} onOpenChange={setEditorOpen} onSave={saveEditedProposal} />
+    <div className="agent-command-surface flex h-[100dvh] min-h-0 overflow-hidden bg-background text-foreground">
+      <ProposalEditor proposal={editing} open={editorOpen} onOpenChange={setEditorOpen} onSave={(proposal) => void saveEditedProposal(proposal)} />
       <SkillsDialog open={skillsOpen} onOpenChange={setSkillsOpen} skills={skills} enabled={enabled} toggle={toggle} />
       <input
         ref={importInputRef}
@@ -1013,47 +1067,29 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
         }}
       />
 
-      {actionsOpen ? (
-        <ProposedActionsPanel
-          proposals={proposals}
-          sending={sending}
-          onEdit={(proposal) => {
-            setEditing(proposal)
-            setEditorOpen(true)
-          }}
-          onReject={rejectProposal}
-          onApprove={(proposal) => void executeProposal(proposal)}
-          onCollapse={() => setActionsOpen(false)}
-        />
-      ) : (
-        <aside className="hidden w-12 shrink-0 flex-col items-center border-r bg-card py-3 lg:flex">
-          <Button variant="ghost" size="icon" onClick={() => setActionsOpen(true)} aria-label="Show proposed actions">
-            <PanelLeftOpen className="h-4 w-4" />
-          </Button>
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground [writing-mode:vertical-rl]">
-            <span>Actions</span>
-            <Badge variant="secondary" className="px-1 py-0">
-              {proposals.length}
-            </Badge>
-          </div>
-        </aside>
-      )}
-
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <main className="flex min-w-0 flex-1 flex-col bg-background/76 backdrop-blur-sm">
+        <header className=" flex min-h-16 shrink-0 items-center justify-between gap-4 border-b bg-card/95 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
                 <Bot className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">SleekCRM Agent</p>
+                <p className="truncate text-base font-semibold tracking-tight">SleekCRM Agent</p>
+                <p className="hidden truncate text-xs text-muted-foreground sm:block">
+                  CRM questions, imports, proposals, and approved actions
+                </p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {status ? <span className="hidden text-xs text-muted-foreground md:inline">{status}</span> : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {status ? (
+              <span className="hidden items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-xs text-muted-foreground md:inline-flex">
+                <span className={`h-1.5 w-1.5 rounded-full bg-primary ${sending || loading || importing ? "animate-pulse" : ""}`} />
+                {status}
+              </span>
+            ) : null}
             <Button variant="outline" size="sm" onClick={() => setSkillsOpen(true)}>
               <Settings2 className="mr-2 h-4 w-4" />
               Skills
@@ -1067,109 +1103,117 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
           </div>
         </header>
 
-        <section className="flex min-h-0 flex-1 flex-col">
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6">
-              {messages.map((message) => {
-                const messageParts = parseMessageAttachments(message.content)
-                const parsed = message.role === "assistant" ? parseAssistantMessage(messageParts.text) : { text: messageParts.text, inlineAction: null }
+        <section className="flex min-h-0 flex-1 flex-col xl:flex-row">
+          <AgentContextRail
+            snapshot={snapshot}
+            proposals={proposals}
+            enabledSkillCount={enabled.length}
+            suggestedPrompts={suggestedPrompts}
+            sending={sending || importing}
+            onPrompt={(prompt) => void sendChat(prompt)}
+          />
 
-                return (
-                  <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[88%] rounded-lg px-4 py-3 text-sm leading-6 shadow-sm transition-all duration-200 ${
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "border bg-card text-card-foreground hover:border-primary/20"
-                      }`}
-                    >
-                      {message.role === "assistant" ? (
-                        <>
-                          {messageParts.attachments.length ? (
-                            <div className="mb-3 flex flex-wrap gap-2">
-                              {messageParts.attachments.map((attachment) => (
-                                <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
-                                  <FileUp className="h-3.5 w-3.5 shrink-0" />
-                                  <span className="truncate">{attachment.name}</span>
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {parsed.text ? (
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
-                                ul: ({ node, ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
-                                ol: ({ node, ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
-                                strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
-                                code: ({ node, className, children, ...props }) => (
-                                  <code className="rounded bg-muted px-1 py-0.5 text-xs" {...props}>
-                                    {children}
-                                  </code>
-                                ),
-                              }}
-                            >
-                              {parsed.text}
-                            </ReactMarkdown>
-                          ) : (
-                            <span className="inline-flex items-center gap-2 text-muted-foreground">
-                              <RefreshCw className="h-4 w-4 animate-spin" />
-                              Working
-                            </span>
-                          )}
-                          {parsed.inlineAction ? (
-                            <div className="mt-3 rounded-lg border bg-background p-3">
-                              <p className="text-sm font-medium">{parsed.inlineAction.title}</p>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {parsed.inlineAction.options.map((option) => (
-                                  <Button key={option.label} size="sm" variant="outline" onClick={() => void sendChat(option.value)} disabled={sending}>
-                                    {option.label}
-                                  </Button>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="mx-auto w-full max-w-5xl space-y-5 px-4 py-6 sm:px-6">
+                {messages.map((message) => {
+                  const messageParts = parseMessageAttachments(message.content)
+                  const parsed = message.role === "assistant" ? parseAssistantMessage(messageParts.text) : { text: messageParts.text, interactive: null }
+                  const answeredLabel = answeredInteractions[message.id]
+
+                  return (
+                    <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div
+                        className={`max-w-[92%] rounded-lg px-4 py-3 text-sm leading-6 shadow-sm transition-all duration-200 md:max-w-[78%] ${
+                          message.role === "user"
+                            ? "bg-primary text-primary-foreground shadow-primary/15"
+                            : "border bg-card text-card-foreground hover:border-primary/30"
+                        }`}
+                      >
+                        {message.role === "assistant" ? (
+                          <>
+                            {messageParts.attachments.length ? (
+                              <div className="mb-3 flex flex-wrap gap-2">
+                                {messageParts.attachments.map((attachment) => (
+                                  <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
+                                    <FileUp className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="truncate">{attachment.name}</span>
+                                  </span>
                                 ))}
                               </div>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <>
-                          {messageParts.attachments.length ? (
-                            <div className="mb-3 flex flex-wrap gap-2">
-                              {messageParts.attachments.map((attachment) => (
-                                <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md bg-primary-foreground/15 px-2.5 py-1.5 text-xs">
-                                  <FileUp className="h-3.5 w-3.5 shrink-0" />
-                                  <span className="truncate">{attachment.name}</span>
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          <p>{parsed.text}</p>
-                        </>
-                      )}
+                            ) : null}
+                            {parsed.text ? (
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                                  ul: ({ node, ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
+                                  ol: ({ node, ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
+                                  strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
+                                  code: ({ node, className, children, ...props }) => (
+                                    <code className="rounded bg-muted px-1 py-0.5 text-xs" {...props}>
+                                      {children}
+                                    </code>
+                                  ),
+                                }}
+                              >
+                                {parsed.text}
+                              </ReactMarkdown>
+                            ) : (
+                              <span className="inline-flex items-center gap-2 text-muted-foreground">
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                Working
+                              </span>
+                            )}
+                            {parsed.interactive ? (
+                              <InteractivePromptBlock
+                                prompt={parsed.interactive}
+                                disabled={sending || Boolean(answeredLabel)}
+                                answeredLabel={answeredLabel}
+                                onSelect={(value, label) => selectInteractiveReply(message.id, label, value)}
+                              />
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {messageParts.attachments.length ? (
+                              <div className="mb-3 flex flex-wrap gap-2">
+                                {messageParts.attachments.map((attachment) => (
+                                  <span key={attachment.id} className="inline-flex max-w-full items-center gap-2 rounded-md bg-primary-foreground/15 px-2.5 py-1.5 text-xs">
+                                    <FileUp className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="truncate">{attachment.name}</span>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                            <p>{parsed.text}</p>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
 
-              <div ref={messagesEndRef} />
-            </div>
-          </ScrollArea>
+                <InlineProposals
+                  proposals={proposals}
+                  sending={sending}
+                  onEdit={(proposal) => {
+                    setEditing(proposal)
+                    setEditorOpen(true)
+                  }}
+                  onReject={(proposalId) => void rejectProposal(proposalId)}
+                  onApprove={(proposal) => void executeProposal(proposal)}
+                />
 
-          <div className="shrink-0 border-t bg-card/95 p-4">
-            {messages.length <= 1 ? (
-              <div className="mx-auto mb-3 flex max-w-4xl flex-wrap gap-2">
-                {suggestedPrompts.map((prompt) => (
-                  <Button key={prompt} type="button" variant="outline" size="sm" className="transition-all hover:-translate-y-0.5 hover:border-primary/40" onClick={() => void sendChat(prompt)}>
-                    {prompt}
-                  </Button>
-                ))}
+                <div ref={messagesEndRef} />
               </div>
-            ) : null}
+            </ScrollArea>
 
-            <div className="relative mx-auto max-w-4xl">
+            <div className="shrink-0 border-t bg-card/95 p-4">
+              <div className="relative mx-auto max-w-5xl">
               {commandOpen ? (
-                <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border bg-popover shadow-xl">
-                  <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">Commands</div>
+                <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border bg-popover shadow-xl shadow-primary/10">
+                  <div className=" border-b px-3 py-2 text-xs font-medium text-muted-foreground">Commands</div>
                   <div className="p-1">
                     {commandSuggestions.map((command) => {
                       const Icon = command.icon
@@ -1180,7 +1224,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                           onClick={() => selectCommand(command.prompt)}
                           className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
                         >
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
                             <Icon className="h-4 w-4" />
                           </span>
                           <span className="min-w-0">
@@ -1195,8 +1239,8 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
               ) : null}
 
               <div
-                className={`relative overflow-hidden rounded-xl border bg-background shadow-sm transition-all duration-200 ${
-                  composerFocused ? "border-primary/40 shadow-lg ring-4 ring-primary/10" : "hover:border-primary/30"
+                className={`relative overflow-hidden rounded-lg border bg-background shadow-sm transition-all duration-200 ${
+                  composerFocused ? "border-primary/60 shadow-xl shadow-primary/10 ring-4 ring-primary/10" : "hover:border-primary/30"
                 }`}
               >
                 <Textarea
@@ -1221,7 +1265,7 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                     }
                   }}
                   placeholder="Ask about customers, surveys, emails, churn risk, feature requests, or this week's focus..."
-                  className={`min-h-[72px] resize-none border-0 bg-transparent px-4 py-4 shadow-none focus-visible:ring-0 ${
+                  className={`min-h-[72px] resize-none border-0 bg-transparent px-4 py-4 text-base shadow-none focus-visible:ring-0 md:text-sm ${
                     pendingAttachments.length || importFileName ? "pb-28" : "pb-16"
                   }`}
                 />
@@ -1282,16 +1326,17 @@ export function CRMAgentConsole({ closeHref = "/dashboard" }: { closeHref?: stri
                     </span>
                   </div>
 
-                <Button
-                  onClick={() => void sendChat(input)}
-                  disabled={sending || importing || (!input.trim() && pendingAttachments.length === 0)}
-                  className="h-8 px-3 transition-all hover:-translate-y-0.5"
-                >
-                  {sending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
+                  <Button
+                    onClick={() => void sendChat(input)}
+                    disabled={sending || importing || (!input.trim() && pendingAttachments.length === 0)}
+                    className="h-8 px-3 transition-all hover:-translate-y-0.5"
+                  >
+                    {sending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </section>
       </main>

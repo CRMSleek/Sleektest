@@ -23,6 +23,7 @@ const MODULE_TABLES: Record<string, { table: string; schema?: any; select?: stri
   templates: { table: "crm_communication_templates" },
   forms: { table: "crm_public_forms" },
   approvals: { table: "crm_ai_action_approvals" },
+  donorResearch: { table: "crm_donor_research_requests" },
   suppressions: { table: "crm_suppression_list" },
   usage: { table: "crm_usage_events" },
 }

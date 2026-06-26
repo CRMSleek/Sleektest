@@ -1,46 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
-import { getEffectiveEmailCredentials } from "@/lib/email-settings"
-import { ImapFlow } from "imapflow"
+import { createInboxClient, getEmailProviderReadiness } from "@/lib/server-email-provider"
 import { simpleParser } from "mailparser"
-
-function getImapConfigFromDomain(email: string, password: string) {
-  const domain = email.split("@")[1]?.toLowerCase() || ""
-
-  if (domain === "gmail.com") {
-    return {
-      host: "imap.gmail.com",
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: password },
-    }
-  }
-
-  if (["outlook.com", "hotmail.com", "live.com"].includes(domain) || domain.endsWith("office365.com")) {
-    return {
-      host: "outlook.office365.com",
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: password },
-    }
-  }
-
-  if (["yahoo.com", "ymail.com"].includes(domain)) {
-    return {
-      host: "imap.mail.yahoo.com",
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: password },
-    }
-  }
-
-  return {
-    host: process.env.DEFAULT_IMAP_HOST || `imap.${domain}`,
-    port: Number(process.env.DEFAULT_IMAP_PORT || 993),
-    secure: true,
-    auth: { user: email, pass: password },
-  }
-}
+import type { ImapFlow } from "imapflow"
 
 export async function POST(request: NextRequest) {
   let client: ImapFlow | null = null
@@ -52,12 +14,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const credentials = await getEffectiveEmailCredentials(request)
-    if (!credentials) {
+    const { client: inboxClient, error: inboxError } = await createInboxClient(request)
+    if (!inboxClient) {
       return NextResponse.json(
         {
-          error:
-            "Email not configured. Please configure SMTP/IMAP in Settings (use an app-specific password for your email).",
+          error: inboxError || "Email not configured. Please configure SMTP/IMAP in Settings (use an app-specific password for your email).",
         },
         { status: 400 },
       )
@@ -66,16 +27,7 @@ export async function POST(request: NextRequest) {
     const { maxResults = 10 } = await request.json().catch(() => ({ maxResults: 10 }))
     const limit = Math.min(Math.max(Number(maxResults) || 10, 1), 50)
 
-    const imapConfig =
-      credentials.imap?.host && credentials.imap?.port
-        ? {
-            host: credentials.imap.host,
-            port: credentials.imap.port,
-            secure: credentials.imap.secure ?? true,
-            auth: { user: credentials.email, pass: credentials.password },
-          }
-        : getImapConfigFromDomain(credentials.email, credentials.password)
-    client = new ImapFlow(imapConfig)
+    client = inboxClient
     await client.connect()
 
     lock = await client.getMailboxLock("INBOX")
@@ -170,8 +122,8 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const credentials = await getEffectiveEmailCredentials(request)
-    return NextResponse.json({ OAuth: !!credentials }, { status: 200 })
+    const readiness = await getEmailProviderReadiness(request)
+    return NextResponse.json({ OAuth: readiness.ready, readiness }, { status: 200 })
   } catch (e) {
     console.error("Failed to fetch email configuration status:", e)
     return NextResponse.json({ error: "Failed to fetch email configuration status" }, { status: 500 })

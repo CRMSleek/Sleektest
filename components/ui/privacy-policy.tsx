@@ -60,13 +60,13 @@ export default function PrivacyPolicyPage({
             <h2 className="text-2xl font-semibold mt-6 mb-4">How We Use Your Information</h2>
             <p className="mb-4 text-gray-700 dark:text-gray-300">
               We use your information to provide our AI-centered CRM services, including analyzing emails you
-              select and survey data to generate insights for your business.
+              select and survey data to generate summaries and CRM recommendations for your business.
             </p>
 
             <h2 className="text-2xl font-semibold mt-6 mb-4">Email Analysis</h2>
             <p className="mb-4 text-gray-700 dark:text-gray-300">
               Only emails you explicitly choose for AI analysis are processed. We read message bodies, subject
-              lines, and sender/recipient information solely to generate business insights.
+              lines, and sender/recipient information solely to generate summaries and CRM recommendations.
             </p>
 
             <h2 className="text-2xl font-semibold mt-6 mb-4">Data Storage</h2>

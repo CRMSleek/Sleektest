@@ -72,17 +72,17 @@ export default function PrivacyPolicyPage() {
           {/* NEW */}
           <h2 className="text-2xl font-semibold mt-6 mb-4">How We Use Google User Data</h2>
           <p className="mb-4 text-gray-700 dark:text-gray-300">
-            Gmail data is used solely to generate CRM insights for you. Specifically, we use your
+            Gmail data is used solely to support CRM summaries and recommended actions for you. Specifically, we use your
             selected email content to:
           </p>
           <ul className="list-disc list-inside mb-4 space-y-1 text-gray-700 dark:text-gray-300">
             <li>Analyze customer communication patterns</li>
-            <li>Generate summaries and insights</li>
+            <li>Generate summaries and CRM recommendations</li>
             <li>Support CRM features such as follow-up detection</li>
           </ul>
           <p className="mb-4 text-gray-700 dark:text-gray-300">
-            Full message text is transmitted to our AI processing endpoint at{" "}
-            <code>https://api.groq.com/openai/v1</code> to generate insights. No other third
+            Full message text is transmitted to the AI processing endpoint configured for the CRM agent
+            to generate summaries and recommendations. No other third
             parties receive your Gmail data.
           </p>
 
@@ -97,7 +97,7 @@ export default function PrivacyPolicyPage() {
               select.
             </li>
             <li>
-              <strong>Groq LLM API</strong> — to process message text and generate insights.
+              <strong>Configured LLM API</strong> — to process message text and generate summaries or recommendations.
             </li>
           </ul>
 

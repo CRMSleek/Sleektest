@@ -58,6 +58,29 @@
   }
 }
 
+@layer components {
+  .agent-command-surface {
+    background:
+      linear-gradient(to right, hsl(var(--border) / 0.42) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.36) 1px, transparent 1px),
+      linear-gradient(135deg, hsl(var(--background)) 0%, hsl(var(--muted) / 0.44) 52%, hsl(var(--background)) 100%);
+    background-size: 44px 44px, 44px 44px, 100% 100%;
+  }
+
+  .agent-command-header {
+    background:
+      linear-gradient(to right, hsl(var(--foreground)) 0 16px, transparent 16px 24px, hsl(var(--foreground)) 24px 40px, transparent 40px),
+      hsl(var(--card) / 0.96);
+    background-position: left bottom;
+    background-repeat: repeat-x;
+    background-size: 80px 2px, auto;
+  }
+
+  .agent-number {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
