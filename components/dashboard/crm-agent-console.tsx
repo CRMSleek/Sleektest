@@ -638,9 +638,6 @@ function AgentContextRail({
     <aside className="border-b bg-card/90 xl:w-[280px] xl:shrink-0 xl:border-b-0 xl:border-r">
       <div className=" border-b px-4 py-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Bot className="h-5 w-5" />
-          </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">Agent workspace</p>
             <p className="mt-1 text-xs text-muted-foreground">{snapshot?.latestActivityAt ? `Updated ${formatTime(snapshot.latestActivityAt)}` : "CRM context loading"}</p>
