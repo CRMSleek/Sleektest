@@ -18,7 +18,7 @@ const items = [
   },
   {
     name: "Relationships",
-    href: "/dashboard/customers",
+    href: "/dashboard/relationships",
     icon: Users,
   },
   {

@@ -7,10 +7,12 @@
     "build": "next build",
     "check:env": "node tools/check-env.mjs",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@ai-sdk/openai": "latest",
+    "@ai-sdk/openai": "^4.0.4",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@hookform/resolvers": "^3.9.1",
@@ -48,7 +50,7 @@
     "@tiptap/extension-underline": "^3.10.2",
     "@tiptap/react": "^3.10.2",
     "@tiptap/starter-kit": "^3.10.2",
-    "ai": "latest",
+    "ai": "^7.0.8",
     "autoprefixer": "^10.4.20",
     "bcryptjs": "latest",
     "class-variance-authority": "^0.7.1",
@@ -67,10 +69,10 @@
     "mammoth": "^1.11.0",
     "motion": "^12.23.6",
     "nanoid": "latest",
-    "next": "15.5.9",
+    "next": "^15.5.19",
     "next-auth": "^5.0.0-beta.29",
     "next-themes": "^0.4.4",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^9.0.3",
     "openai": "^5.13.1",
     "pdf-parse": "^2.4.5",
     "react": "^18",
@@ -90,12 +92,14 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^22",
     "@types/nodemailer": "^7.0.3",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.9"
   }
 }

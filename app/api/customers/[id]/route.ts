@@ -1,8 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { getCurrentUser } from "@/lib/supabase/auth"
 import { customerSchema } from "@/lib/validations"
-import { writeAuditLog } from "@/lib/audit-log"
+import { getCustomerCompatibleRelationship, updateCustomerCompatibleRelationship } from "@/lib/crm-platform"
 
 type RouteContext = { params: Promise<{ id: string }> }
 
@@ -15,56 +14,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     const { id } = await context.params
 
-    const { data: customer, error } = await supabase
-      .from('customers')
-      .select('id, name, email, phone, location, age, notes, relationship_type, created_at')
-      .eq('id', id)
-      .eq('business_id', user.business.id)
-      .single()
+    const customer = await getCustomerCompatibleRelationship(user, id)
 
-    if (error || !customer) {
+    if (!customer) {
       return NextResponse.json({ error: "Customer not found" }, { status: 404 })
     }
 
-    // Fetch responses for this customer (with survey title)
-    const { data: responses } = await supabase
-      .from('survey_responses')
-      .select('id, submitted_at, answers, survey_id')
-      .eq('customer_id', id)
-      .eq('business_id', user.business.id)
-      .order('submitted_at', { ascending: false })
-
-    let responsesWithTitles: any[] = []
-    if (responses && responses.length > 0) {
-      const surveyIds = [...new Set(responses.map(r => r.survey_id))]
-      const { data: surveysMapData } = await supabase
-        .from('surveys')
-        .select('id, title')
-        .in('id', surveyIds)
-      const titleById: Record<string, string> = {}
-      surveysMapData?.forEach(s => { titleById[s.id] = s.title })
-      responsesWithTitles = responses.map(r => ({
-        id: r.id,
-        submittedAt: r.submitted_at,
-        answers: r.answers,
-        survey: { title: titleById[r.survey_id] || 'Survey' },
-      }))
-    }
-
-    const normalized = {
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      phone: customer.phone,
-      location: customer.location,
-      age: customer.age,
-      notes: customer.notes,
-      relationship_type: customer.relationship_type || "customer",
-      createdAt: customer.created_at,
-      responses: responsesWithTitles,
-    }
-
-    return NextResponse.json({ customer: normalized })
+    return NextResponse.json({ customer })
   } catch (error) {
     console.error("Get customer error", error)
     return NextResponse.json({ error: "Failed to fetch customer" }, { status: 500 })
@@ -82,39 +38,13 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     const validatedData = customerSchema.partial().parse(body)
     const { id } = await context.params
 
-    const { data: customer, error } = await supabase
-      .from('customers')
-      .update(validatedData)
-      .eq('id', id)
-      .eq('business_id', user.business.id)
-      .select('id, name, email, location, age, relationship_type, created_at')
-      .single()
+    const customer = await updateCustomerCompatibleRelationship(user, id, validatedData, request)
 
-    if (error || !customer) {
+    if (!customer) {
       return NextResponse.json({ error: "Customer not found" }, { status: 404 })
     }
 
-    await writeAuditLog({
-      actorUserId: user.id,
-      businessId: user.business.id,
-      action: "customer.updated",
-      tableName: "customers",
-      rowId: id,
-      request,
-    })
-
-    const normalized = {
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      location: customer.location,
-      age: customer.age,
-      relationship_type: customer.relationship_type || "customer",
-      createdAt: customer.created_at,
-      responses: [],
-    }
-
-    return NextResponse.json({ customer: normalized })
+    return NextResponse.json({ customer })
   } catch (error) {
     console.error("Update customer error:", error)
     return NextResponse.json({ error: "Failed to update customer" }, { status: 500 })
@@ -130,26 +60,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
     const { id } = await context.params
 
-    const { error } = await supabase
-      .from('customers')
-      .delete()
-      .eq('id', id)
-      .eq('business_id', user.business.id)
-
-    if (error) {
-      return NextResponse.json({ error: "Customer not found" }, { status: 404 })
-    }
-
-    await writeAuditLog({
-      actorUserId: user.id,
-      businessId: user.business.id,
-      action: "customer.deleted",
-      tableName: "customers",
-      rowId: id,
-      request,
-    })
-
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ error: "Relationship deletion requires the canonical merge/delete workflow" }, { status: 409 })
   } catch (error) {
     console.error("Delete customer error:", error)
     return NextResponse.json({ error: "Failed to delete customer" }, { status: 500 })

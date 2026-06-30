@@ -2,6 +2,7 @@ import { createHash } from "crypto"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { fetchRelevantInboxEmailsForAnalysis, saveEmailsForAnalysis } from "@/lib/email-analysis-selection"
 import { buildPlatformSummary, getIntegrationSummary } from "@/lib/crm-platform"
+import { approvalStatusForRisk, proposedDiffForAction, riskTierForAction, sourceActivityIdsFromEvidence } from "@/lib/crm-agent-risk"
 import { getEmailProviderReadiness, sendEmailWithProvider } from "@/lib/server-email-provider"
 import type { NextRequest } from "next/server"
 
@@ -1146,6 +1147,7 @@ async function persistActionProposals(user: UserContext, proposals: CRMActionPro
   if (!businessId || proposals.length === 0) return proposals
 
   const rows = proposals.map((proposal) => ({
+    risk_tier: riskTierForAction(proposal.kind),
     business_id: businessId,
     user_id: user.id,
     action_kind: proposal.kind,
@@ -1153,7 +1155,12 @@ async function persistActionProposals(user: UserContext, proposals: CRMActionPro
     reasoning: proposal.reasoning,
     evidence: proposal.evidence,
     payload: { ...proposal.payload, proposalId: proposal.payload?.proposalId || proposal.id, draft: proposal.draft || null },
-    status: proposal.status === "proposed" ? "pending" : proposal.status,
+    status: proposal.status === "proposed" ? approvalStatusForRisk(riskTierForAction(proposal.kind)) : proposal.status,
+    approval_status: proposal.status === "proposed" ? approvalStatusForRisk(riskTierForAction(proposal.kind)) : proposal.status,
+    target_table: proposal.kind === "update_customer" ? "customers" : proposal.kind === "create_task" ? "tasks" : null,
+    target_id: proposal.payload?.customerId || proposal.payload?.recordId || null,
+    source_activity_ids: sourceActivityIdsFromEvidence(proposal.evidence),
+    proposed_diff: proposedDiffForAction(proposal),
   }))
 
   const proposalIds = rows.map((row) => row.payload.proposalId)
@@ -1181,7 +1188,7 @@ async function persistActionProposals(user: UserContext, proposals: CRMActionPro
 
   const { data } = await supabase
     .from("crm_ai_action_approvals")
-    .select("id, action_kind, title, reasoning, evidence, payload, status, created_at")
+    .select("id, action_kind, title, reasoning, evidence, payload, status, risk_tier, proposed_diff, created_at")
     .eq("business_id", businessId)
     .eq("user_id", user.id)
     .in("status", ["pending", "approved"])
@@ -1216,7 +1223,7 @@ async function listPendingActionApprovals(user: UserContext): Promise<CRMActionP
   if (!businessId) return []
   const { data, error } = await supabase
     .from("crm_ai_action_approvals")
-    .select("id, action_kind, title, reasoning, evidence, payload, status, created_at")
+    .select("id, action_kind, title, reasoning, evidence, payload, status, risk_tier, proposed_diff, created_at")
     .eq("business_id", businessId)
     .eq("user_id", user.id)
     .in("status", ["pending", "approved"])
@@ -1248,9 +1255,15 @@ async function markApprovalStarted(user: UserContext, action: CRMActionProposal)
     .from("crm_ai_action_approvals")
     .update({
       status: "approved",
+      approval_status: "approved",
       approved_by: user.id,
       approved_at: new Date().toISOString(),
       payload: { ...action.payload, draft: action.draft || action.payload?.draft || null },
+      risk_tier: riskTierForAction(action.kind),
+      target_table: action.kind === "update_customer" ? "customers" : action.kind === "create_task" ? "tasks" : null,
+      target_id: action.payload?.customerId || action.payload?.recordId || null,
+      source_activity_ids: sourceActivityIdsFromEvidence(action.evidence),
+      proposed_diff: proposedDiffForAction(action),
     })
     .eq("business_id", businessId)
     .eq("user_id", user.id)
@@ -1267,6 +1280,7 @@ async function markApprovalFinished(user: UserContext, action: CRMActionProposal
     .from("crm_ai_action_approvals")
     .update({
       status: result.ok ? "completed" : "approved",
+      approval_status: result.ok ? "completed" : "approved",
       executed_at: result.ok ? new Date().toISOString() : null,
       execution_result: result,
     })
@@ -1282,6 +1296,7 @@ export async function rejectCRMAction(user: UserContext, actionId: string) {
     .from("crm_ai_action_approvals")
     .update({
       status: "rejected",
+      approval_status: "rejected",
       execution_result: { rejectedAt: new Date().toISOString() },
     })
     .eq("business_id", businessId)
@@ -1302,6 +1317,12 @@ export async function saveCRMActionProposal(user: UserContext, action: CRMAction
       reasoning: safeText(action.reasoning),
       evidence: action.evidence || [],
       payload: { ...action.payload, draft: action.draft || action.payload?.draft || null },
+      risk_tier: riskTierForAction(action.kind),
+      approval_status: approvalStatusForRisk(riskTierForAction(action.kind)),
+      target_table: action.kind === "update_customer" ? "customers" : action.kind === "create_task" ? "tasks" : null,
+      target_id: action.payload?.customerId || action.payload?.recordId || null,
+      source_activity_ids: sourceActivityIdsFromEvidence(action.evidence),
+      proposed_diff: proposedDiffForAction(action),
     })
     .eq("business_id", businessId)
     .eq("user_id", user.id)

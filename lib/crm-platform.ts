@@ -4,6 +4,8 @@ import { z } from "zod"
 import type { NextRequest } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase/server"
 import { writeAuditLog } from "@/lib/audit-log"
+import { normalizeDuplicateKey } from "@/lib/crm-normalization"
+import { linkRelationship, type RelationshipLinkInput, type RelationshipLinkerStore } from "@/lib/relationship-linker"
 
 export const FIELD_TYPES = [
   "text",
@@ -283,10 +285,7 @@ function normalizeRecordValue(fieldType: CRMFieldType, value: unknown) {
 }
 
 function duplicateKeyFromValues(values: Record<string, any>) {
-  const email = typeof values.email === "string" ? values.email.trim().toLowerCase() : ""
-  const name = typeof values.name === "string" ? values.name.trim().toLowerCase().replace(/\s+/g, "") : ""
-  const phone = typeof values.phone === "string" ? values.phone.replace(/[^\d+]/g, "") : ""
-  return email || phone || name || null
+  return normalizeDuplicateKey(values)
 }
 
 export async function ensurePlatformDefaults(user: CRMUserContext) {
@@ -395,6 +394,7 @@ async function validateRecordValues(user: CRMUserContext, objectTypeId: string, 
   const objectType = await getObjectTypeWithFields(user, objectTypeId)
   const fields = (objectType.crm_field_definitions || []) as Array<any>
   const normalized: Record<string, any> = {}
+  const relationshipTargets: Array<{ fieldId: string; apiName: string; value: string }> = []
 
   for (const field of fields) {
     const apiName = field.api_name
@@ -404,6 +404,9 @@ async function validateRecordValues(user: CRMUserContext, objectTypeId: string, 
     }
     if (raw != null && raw !== "") {
       normalized[apiName] = normalizeRecordValue(field.field_type, raw)
+      if (field.field_type === "relationship") {
+        relationshipTargets.push({ fieldId: field.id, apiName, value: String(normalized[apiName]) })
+      }
     }
   }
 
@@ -411,6 +414,19 @@ async function validateRecordValues(user: CRMUserContext, objectTypeId: string, 
     if (!(key in normalized) && !fields.some((field) => field.api_name === key)) {
       normalized[key] = value
     }
+  }
+
+  if (relationshipTargets.length > 0) {
+    const ids = relationshipTargets.map((target) => target.value)
+    const { data, error } = await supabase
+      .from("crm_records")
+      .select("id")
+      .eq("business_id", requireBusiness(user))
+      .in("id", ids)
+    if (error) throw error
+    const found = new Set((data || []).map((row: any) => row.id))
+    const missing = relationshipTargets.find((target) => !found.has(target.value))
+    if (missing) throw new Error(`${missing.apiName} must reference an existing relationship record`)
   }
 
   return { objectType, values: normalized }
@@ -479,7 +495,7 @@ export async function createRecord(user: CRMUserContext, input: unknown, request
 
 export async function getRecord(user: CRMUserContext, id: string) {
   const businessId = requireBusiness(user)
-  const [{ data: record, error }, { data: engagements }, { data: relationships }] = await Promise.all([
+  const [{ data: record, error }, { data: engagements }, { data: activities }, { data: relationships }, { data: tasks }, { data: tags }, { data: externalLinks }] = await Promise.all([
     supabase
       .from("crm_records")
       .select("*, crm_object_types(*, crm_field_definitions!crm_field_definitions_object_type_id_fkey(*))")
@@ -494,14 +510,50 @@ export async function getRecord(user: CRMUserContext, id: string) {
       .order("occurred_at", { ascending: false })
       .limit(100),
     supabase
+      .from("activities")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("record_id", id)
+      .order("occurred_at", { ascending: false })
+      .limit(100),
+    supabase
       .from("crm_record_relationships")
       .select("*, to_record:to_record_id(id, display_name), from_record:from_record_id(id, display_name)")
       .eq("business_id", businessId)
       .or(`from_record_id.eq.${id},to_record_id.eq.${id}`)
       .limit(100),
+    supabase
+      .from("tasks")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("record_id", id)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("relationship_tags")
+      .select("*, tags(*)")
+      .eq("business_id", businessId)
+      .eq("record_id", id)
+      .limit(50),
+    supabase
+      .from("external_links")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("record_id", id)
+      .order("last_seen_at", { ascending: false })
+      .limit(50),
   ])
   if (error) throw error
-  return { record, engagements: engagements || [], relationships: relationships || [] }
+  return {
+    record,
+    engagements: [...(activities || []), ...(engagements || [])].sort(
+      (a: any, b: any) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
+    ),
+    relationships: relationships || [],
+    tasks: tasks || [],
+    tags: tags || [],
+    externalLinks: externalLinks || [],
+  }
 }
 
 export async function updateRecord(user: CRMUserContext, id: string, input: unknown, request?: NextRequest) {
@@ -591,6 +643,333 @@ export async function createEngagement(user: CRMUserContext, input: unknown, req
   })
 
   return data
+}
+
+export async function listActivities(user: CRMUserContext, params: URLSearchParams) {
+  const businessId = requireBusiness(user)
+  const recordId = params.get("recordId")
+  const cursor = params.get("cursor")
+  const pageSize = Math.min(Math.max(Number(params.get("pageSize") || "50"), 1), 100)
+  let query: any = supabase
+    .from("activities")
+    .select("*")
+    .eq("business_id", businessId)
+    .order("occurred_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(pageSize + 1)
+  if (recordId) query = query.eq("record_id", recordId)
+  if (cursor) {
+    const [occurredAt, id] = cursor.split("|")
+    if (occurredAt && id) query = query.or(`occurred_at.lt.${occurredAt},and(occurred_at.eq.${occurredAt},id.lt.${id})`)
+  }
+  const { data, error } = await query
+  if (error) throw error
+  const rows = data || []
+  const page = rows.slice(0, pageSize)
+  const last = page[page.length - 1]
+  return {
+    activities: page,
+    nextCursor: rows.length > pageSize && last ? `${last.occurred_at}|${last.id}` : null,
+  }
+}
+
+export async function createTask(user: CRMUserContext, input: any, request?: NextRequest) {
+  const businessId = requireBusiness(user)
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      business_id: businessId,
+      record_id: input.recordId || null,
+      owner_user_id: user.id,
+      title: input.title,
+      description: input.description || "",
+      status: input.status || "open",
+      priority: input.priority || "medium",
+      due_at: input.dueAt || null,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  await writeAuditLog({ actorUserId: user.id, businessId, action: "task.created", tableName: "tasks", rowId: data.id, request })
+  return data
+}
+
+export async function createTagForRelationship(user: CRMUserContext, recordId: string, name: string, request?: NextRequest) {
+  const businessId = requireBusiness(user)
+  const { data: tag, error: tagError } = await supabase
+    .from("tags")
+    .upsert({ business_id: businessId, name, color: "slate" }, { onConflict: "business_id,name" })
+    .select()
+    .single()
+  if (tagError) throw tagError
+
+  const { data, error } = await supabase
+    .from("relationship_tags")
+    .upsert({ business_id: businessId, record_id: recordId, tag_id: tag.id }, { onConflict: "record_id,tag_id" })
+    .select("*, tags(*)")
+    .single()
+  if (error) throw error
+  await writeAuditLog({ actorUserId: user.id, businessId, action: "relationship_tag.created", tableName: "relationship_tags", rowId: data.id, request })
+  return data
+}
+
+async function getPeopleObjectTypeId(user: CRMUserContext) {
+  await ensurePlatformDefaults(user)
+  const businessId = requireBusiness(user)
+  const { data, error } = await supabase
+    .from("crm_object_types")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("api_name", "people")
+    .single()
+  if (error) throw error
+  return data.id as string
+}
+
+function customerFromRecord(record: any, responses: any[] = []) {
+  const values = record?.values || {}
+  return {
+    id: record.id,
+    name: values.name || record.display_name,
+    email: values.email || "",
+    phone: values.phone || "",
+    location: values.location || "",
+    age: values.age ?? null,
+    notes: values.notes || "",
+    relationship_type: values.relationship_type || "customer",
+    createdAt: record.created_at,
+    responses,
+  }
+}
+
+export async function listCustomerCompatibleRelationships(user: CRMUserContext, search = "") {
+  const businessId = requireBusiness(user)
+  const peopleObjectTypeId = await getPeopleObjectTypeId(user)
+  let query: any = supabase
+    .from("crm_records")
+    .select("id, display_name, values, created_at, updated_at")
+    .eq("business_id", businessId)
+    .eq("object_type_id", peopleObjectTypeId)
+    .order("display_name", { ascending: true })
+
+  if (search.trim()) query = query.ilike("display_name", `%${search.replace(/[%_]/g, "")}%`)
+  const { data, error } = await query
+  if (error) throw error
+  return (data || []).map((record: any) => customerFromRecord(record))
+}
+
+export async function createCustomerCompatibleRelationship(user: CRMUserContext, input: Record<string, any>, request?: NextRequest) {
+  const peopleObjectTypeId = await getPeopleObjectTypeId(user)
+  const record = await createRecord(
+    user,
+    {
+      objectTypeId: peopleObjectTypeId,
+      values: {
+        name: input.name,
+        email: input.email,
+        phone: input.phone,
+        location: input.location,
+        age: input.age,
+        notes: input.notes,
+        relationship_type: input.relationship_type || "customer",
+      },
+    },
+    request,
+  )
+  return customerFromRecord(record)
+}
+
+export async function getCustomerCompatibleRelationship(user: CRMUserContext, id: string) {
+  const businessId = requireBusiness(user)
+  const { data: directRecord, error } = await supabase
+    .from("crm_records")
+    .select("id, display_name, values, created_at, updated_at, source_table, source_id")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle()
+  if (error) throw error
+  let record = directRecord
+  if (!record) {
+    const { data: sourceRecord, error: sourceError } = await supabase
+      .from("crm_records")
+      .select("id, display_name, values, created_at, updated_at, source_table, source_id")
+      .eq("business_id", businessId)
+      .eq("source_table", "customers")
+      .eq("source_id", id)
+      .maybeSingle()
+    if (sourceError) throw sourceError
+    record = sourceRecord
+  }
+  if (!record) return null
+
+  const legacyCustomerId = record.values?.legacy_customer_id || (record.source_table === "customers" ? record.source_id : null)
+  let responsesWithTitles: any[] = []
+  if (legacyCustomerId) {
+    const { data: responses } = await supabase
+      .from("survey_responses")
+      .select("id, submitted_at, answers, survey_id")
+      .eq("customer_id", legacyCustomerId)
+      .eq("business_id", businessId)
+      .order("submitted_at", { ascending: false })
+    if (responses?.length) {
+      const surveyIds = [...new Set(responses.map((response: any) => response.survey_id))]
+      const { data: surveysMapData } = await supabase.from("surveys").select("id, title").in("id", surveyIds)
+      const titleById: Record<string, string> = {}
+      surveysMapData?.forEach((survey: any) => {
+        titleById[survey.id] = survey.title
+      })
+      responsesWithTitles = responses.map((response: any) => ({
+        id: response.id,
+        submittedAt: response.submitted_at,
+        answers: response.answers,
+        survey: { title: titleById[response.survey_id] || "Survey" },
+      }))
+    }
+  }
+
+  return customerFromRecord(record, responsesWithTitles)
+}
+
+export async function updateCustomerCompatibleRelationship(user: CRMUserContext, id: string, input: Record<string, any>, request?: NextRequest) {
+  const current = await getRecord(user, id)
+  if (!current.record) return null
+  const next = await updateRecord(
+    user,
+    id,
+    {
+      values: {
+        ...input,
+        relationship_type: input.relationship_type || current.record.values?.relationship_type || "customer",
+      },
+    },
+    request,
+  )
+  return customerFromRecord(next)
+}
+
+function relationshipLinkerStore(user: CRMUserContext): RelationshipLinkerStore {
+  return {
+    async getRecordById({ businessId, id }) {
+      const { data, error } = await supabase.from("crm_records").select("*").eq("business_id", businessId).eq("id", id).maybeSingle()
+      if (error) throw error
+      return data
+    },
+    async getRecordByExternalLink({ businessId, providerKey, externalObjectType, externalObjectId }) {
+      const { data, error } = await supabase
+        .from("external_links")
+        .select("crm_records(*)")
+        .eq("business_id", businessId)
+        .eq("provider_key", providerKey)
+        .eq("external_object_type", externalObjectType)
+        .eq("external_object_id", externalObjectId)
+        .maybeSingle()
+      if (error) throw error
+      return (data as any)?.crm_records || null
+    },
+    async findRecordsByDuplicateKey({ businessId, duplicateKey }) {
+      const peopleObjectTypeId = await getPeopleObjectTypeId(user)
+      const { data, error } = await supabase
+        .from("crm_records")
+        .select("*")
+        .eq("business_id", businessId)
+        .eq("object_type_id", peopleObjectTypeId)
+        .eq("duplicate_key", duplicateKey)
+      if (error) throw error
+      return data || []
+    },
+    async createRelationship(input) {
+      const peopleObjectTypeId = await getPeopleObjectTypeId(user)
+      const { data, error } = await supabase
+        .from("crm_records")
+        .insert({
+          business_id: input.businessId,
+          object_type_id: peopleObjectTypeId,
+          owner_user_id: input.userId || user.id,
+          display_name: input.values.name,
+          values: input.values,
+          duplicate_key: input.duplicateKey,
+          created_by: input.userId || user.id,
+          updated_by: input.userId || user.id,
+          lifecycle_status: "pending",
+        })
+        .select()
+        .single()
+      if (error) throw error
+      return data
+    },
+    async createDuplicateSuggestion(input) {
+      const peopleObjectTypeId = await getPeopleObjectTypeId(user)
+      const { data, error } = await supabase
+        .from("crm_duplicate_sets")
+        .insert({
+          business_id: input.businessId,
+          object_type_id: peopleObjectTypeId,
+          match_key: input.duplicateKey || `${input.sourceType}:${input.sourceId}`,
+          confidence: 0.65,
+          record_ids: input.candidateIds,
+          metadata: { sourceType: input.sourceType, sourceId: input.sourceId, input: input.metadata || {} },
+        })
+        .select()
+        .single()
+      if (error) throw error
+      return data
+    },
+    async upsertExternalLink(input) {
+      const { data, error } = await supabase
+        .from("external_links")
+        .upsert(
+          {
+            business_id: input.businessId,
+            record_id: input.recordId,
+            provider_key: input.providerKey,
+            external_object_type: input.externalObjectType,
+            external_object_id: input.externalObjectId,
+            metadata: input.metadata || {},
+            last_seen_at: new Date().toISOString(),
+          },
+          { onConflict: "business_id,provider_key,external_object_type,external_object_id" },
+        )
+        .select()
+        .single()
+      if (error) throw error
+      return data
+    },
+    async createActivity(input) {
+      const { data, error } = await supabase
+        .from("activities")
+        .insert({
+          business_id: input.businessId,
+          record_id: input.recordId,
+          actor_user_id: input.userId || user.id,
+          activity_type: input.sourceType,
+          subject: input.subject || `${input.sourceType} linked`,
+          body: input.body || "",
+          source_type: input.sourceType,
+          source_id: input.sourceId,
+          status: input.status,
+          metadata: input.metadata || {},
+        })
+        .select()
+        .single()
+      if (error) throw error
+      return data
+    },
+    async writeAudit(input) {
+      await writeAuditLog({
+        actorUserId: input.userId || user.id,
+        businessId: input.businessId,
+        action: input.action,
+        tableName: input.tableName,
+        rowId: input.rowId,
+        metadata: { detail: JSON.stringify(input.metadata || {}) },
+      })
+    },
+  }
+}
+
+export async function linkRelationshipForUser(user: CRMUserContext, input: Omit<RelationshipLinkInput, "businessId" | "userId">) {
+  const businessId = requireBusiness(user)
+  return linkRelationship(relationshipLinkerStore(user), { ...input, businessId, userId: user.id })
 }
 
 export async function findDuplicates(user: CRMUserContext) {

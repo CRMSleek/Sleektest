@@ -23,7 +23,7 @@ import logo from "../../public/logo.png"
 const navigationItems = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/dashboard/agent", label: "Agent", icon: Bot },
-  { href: "/dashboard/customers", label: "Relationships", icon: Users },
+  { href: "/dashboard/relationships", label: "Relationships", icon: Users },
   { href: "/dashboard/communications", label: "Communications", icon: Mail },
   { href: "/dashboard/surveys", label: "Surveys and Forms", icon: FileText },
   { href: "/dashboard/fundraising", label: "Fundraising", icon: HeartHandshake },

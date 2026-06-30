@@ -109,7 +109,7 @@ function sortedFields(objectType?: ObjectType) {
   return [...(objectType?.crm_field_definitions || [])].sort((a, b) => (a.position || 0) - (b.position || 0))
 }
 
-export function CRMPlatformWorkspace() {
+export function CRMPlatformWorkspace({ relationshipMode = false }: { relationshipMode?: boolean }) {
   const [summary, setSummary] = useState<PlatformSummary | null>(null)
   const [records, setRecords] = useState<CRMRecord[]>([])
   const [count, setCount] = useState(0)
@@ -250,9 +250,11 @@ export function CRMPlatformWorkspace() {
     <div className="space-y-6 p-6">
       <div className="flex flex-col gap-4 border-b pb-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-2">
-          <h1 className="text-3xl font-bold tracking-tight">Records</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{relationshipMode ? "Relationships" : "Records"}</h1>
           <p className="max-w-3xl text-muted-foreground">
-            Manage record types, relationship history, duplicate groups, and saved fields.
+            {relationshipMode
+              ? "Manage people, organizations, profile history, tags, tasks, external links, and agent-ready context."
+              : "Manage record types, relationship history, duplicate groups, and saved fields."}
           </p>
         </div>
         <Button variant="outline" onClick={loadPlatform}>
@@ -283,7 +285,7 @@ export function CRMPlatformWorkspace() {
 
       <Tabs defaultValue="records" className="space-y-6">
         <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="records">Records</TabsTrigger>
+          <TabsTrigger value="records">{relationshipMode ? "Relationships" : "Records"}</TabsTrigger>
           <TabsTrigger value="objects">Objects</TabsTrigger>
           <TabsTrigger value="duplicates">Duplicates</TabsTrigger>
           <TabsTrigger value="readiness">Readiness</TabsTrigger>
@@ -322,7 +324,7 @@ export function CRMPlatformWorkspace() {
           <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
             <Card>
               <CardHeader>
-                <CardTitle>Record Table</CardTitle>
+                <CardTitle>{relationshipMode ? "Relationship Table" : "Record Table"}</CardTitle>
                 <CardDescription>{count.toLocaleString()} record(s) in this view</CardDescription>
               </CardHeader>
               <CardContent>
@@ -347,7 +349,7 @@ export function CRMPlatformWorkspace() {
                         <TableCell>{new Date(record.updated_at).toLocaleDateString()}</TableCell>
                         <TableCell>
                           <Button asChild variant="ghost" size="sm">
-                            <Link href={`/dashboard/records/${record.id}`}>View</Link>
+                            <Link href={relationshipMode ? `/dashboard/relationships/${record.id}` : `/dashboard/records/${record.id}`}>View</Link>
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -531,10 +533,12 @@ function ReadinessCard({
   )
 }
 
-export function DynamicRecordPage({ recordId }: { recordId: string }) {
+export function DynamicRecordPage({ recordId, relationshipMode = false }: { recordId: string; relationshipMode?: boolean }) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [eventBody, setEventBody] = useState("")
+  const [taskTitle, setTaskTitle] = useState("")
+  const [tagName, setTagName] = useState("")
   const { toast } = useToast()
 
   const load = async () => {
@@ -578,6 +582,40 @@ export function DynamicRecordPage({ recordId }: { recordId: string }) {
     }
   }
 
+  const createTask = async () => {
+    if (!taskTitle.trim()) return
+    try {
+      const response = await fetch("/api/crm/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId, title: taskTitle, priority: "medium" }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || "Failed to save task")
+      setTaskTitle("")
+      await load()
+    } catch (error: any) {
+      toast({ title: "Task not saved", description: error.message, variant: "destructive" })
+    }
+  }
+
+  const createTag = async () => {
+    if (!tagName.trim()) return
+    try {
+      const response = await fetch("/api/crm/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId, name: tagName }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || "Failed to save tag")
+      setTagName("")
+      await load()
+    } catch (error: any) {
+      toast({ title: "Tag not saved", description: error.message, variant: "destructive" })
+    }
+  }
+
   if (loading) return <div className="p-6 text-muted-foreground">Loading record...</div>
   if (!data?.record) return <div className="p-6 text-muted-foreground">Record not found.</div>
 
@@ -592,10 +630,12 @@ export function DynamicRecordPage({ recordId }: { recordId: string }) {
       <div className="flex flex-col gap-3 border-b pb-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <Button asChild variant="ghost" className="-ml-3 mb-3">
-            <Link href="/dashboard/records">Back to Records</Link>
+            <Link href={relationshipMode ? "/dashboard/relationships" : "/dashboard/records"}>
+              {relationshipMode ? "Back to Relationships" : "Back to Records"}
+            </Link>
           </Button>
           <h1 className="text-3xl font-bold tracking-tight">{data.record.display_name}</h1>
-          <p className="text-muted-foreground">{objectType?.label || "Record"} profile</p>
+          <p className="text-muted-foreground">{relationshipMode ? "Relationship profile" : `${objectType?.label || "Record"} profile`}</p>
         </div>
         <Badge variant="outline">{data.record.lifecycle_status}</Badge>
       </div>
@@ -653,6 +693,53 @@ export function DynamicRecordPage({ recordId }: { recordId: string }) {
                   <p className="text-sm text-muted-foreground">No engagement events yet.</p>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Tasks and Tags</CardTitle>
+              <CardDescription>Operational work stays attached to this relationship profile.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <Input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="New task" />
+                <Button size="sm" onClick={createTask}>Add</Button>
+              </div>
+              <div className="space-y-2">
+                {(data.tasks || []).map((task: any) => (
+                  <div key={task.id} className="rounded-md border p-3 text-sm">
+                    <div className="font-medium">{task.title}</div>
+                    <div className="text-muted-foreground">{task.status} / {task.priority}</div>
+                  </div>
+                ))}
+                {(data.tasks || []).length === 0 && <p className="text-sm text-muted-foreground">No tasks yet.</p>}
+              </div>
+              <div className="flex gap-2">
+                <Input value={tagName} onChange={(event) => setTagName(event.target.value)} placeholder="New tag" />
+                <Button size="sm" variant="outline" onClick={createTag}>Tag</Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(data.tags || []).map((item: any) => (
+                  <Badge key={item.id} variant="secondary">{item.tags?.name || "Tag"}</Badge>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>External Links</CardTitle>
+              <CardDescription>Provider records linked through the integration backbone.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {(data.externalLinks || []).map((link: any) => (
+                <div key={link.id} className="rounded-md border p-3 text-sm">
+                  <div className="font-medium">{link.provider_key}</div>
+                  <div className="text-muted-foreground">{link.external_object_type}: {link.external_object_id}</div>
+                </div>
+              ))}
+              {(data.externalLinks || []).length === 0 && <p className="text-sm text-muted-foreground">No external records linked.</p>}
             </CardContent>
           </Card>
         </div>
